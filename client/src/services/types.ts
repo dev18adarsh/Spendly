@@ -1,9 +1,11 @@
 import type { MerchantSpend } from '@/data/mock/analytics'
 import type {
   Budget,
+  BudgetStatus,
   CashflowPoint,
   Category,
   CategorySpend,
+  OverallBudget,
   PaymentMethod,
   ReportingPeriod,
   SummaryMetrics,
@@ -114,6 +116,17 @@ export interface BudgetDraft {
   year?: number
 }
 
+export interface BudgetQuery {
+  month?: number
+  year?: number
+}
+
+export interface OverallBudgetDraft {
+  limit: number
+  month?: number
+  year?: number
+}
+
 /**
  * The single interface the UI talks to.
  * `services/mock` implements it against sample data today; the HTTP client
@@ -131,7 +144,8 @@ export interface SpendlyApi {
   ): Promise<CashflowPoint[]>
   getCategoryBreakdown(range: DateRangeKey, signal?: AbortSignal): Promise<CategorySpend[]>
   getTransactions(query?: TransactionQuery, signal?: AbortSignal): Promise<Transaction[]>
-  getBudgets(signal?: AbortSignal): Promise<Budget[]>
+  getBudgets(queryOrSignal?: BudgetQuery | AbortSignal, signal?: AbortSignal): Promise<Budget[]>
+  getOverallBudget(query?: BudgetQuery, signal?: AbortSignal): Promise<OverallBudget | null>
   getCategories(signal?: AbortSignal): Promise<Category[]>
   getTopMerchants(range: DateRangeKey, limit?: number, signal?: AbortSignal): Promise<MerchantSpend[]>
 
@@ -142,19 +156,31 @@ export interface SpendlyApi {
   /** Removes a transaction. Resolves once the record is gone. */
   deleteTransaction(id: string): Promise<void>
 
-  /** Creates a monthly budget for a category. */
+  /** Creates or updates a monthly budget for a category. */
   createBudget(draft: BudgetDraft): Promise<Budget>
+  /** Updates the limit of an existing budget. */
+  updateBudget(id: string, limit: number): Promise<Budget>
+  /** Removes a budget. Resolves once the record is gone. */
+  deleteBudget(id: string): Promise<void>
+
+  /** Sets or updates the overall monthly budget. */
+  saveOverallBudget(draft: OverallBudgetDraft): Promise<OverallBudget>
+  /** Removes the overall monthly budget for a period. */
+  deleteOverallBudget(query?: BudgetQuery): Promise<void>
 }
 
 export type {
   Budget,
+  BudgetStatus,
   CashflowPoint,
   Category,
   CategorySpend,
+  OverallBudget,
   ReportingPeriod,
   SummaryMetrics,
   Transaction,
 }
+
 
 /* ------------------------------------------------------------------ */
 /* Authentication                                                       */

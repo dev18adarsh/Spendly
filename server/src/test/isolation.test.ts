@@ -166,6 +166,24 @@ describe('budgets are owned by the account that created them', () => {
     assert.equal(bobBudget.status, 201)
     assert.notEqual(aliceBudget.body.data.id, bobBudget.body.data.id)
   })
+
+  it('keeps overall budgets separate between accounts', async () => {
+    await alice
+      .put('/api/budgets/overall')
+      .send({ limit: 2000, month: 3, year: 2026 })
+
+    const bobOverall = await bob.get('/api/budgets/overall?month=3&year=2026')
+    assert.equal(bobOverall.body.data, null)
+
+    const bobCreated = await bob
+      .put('/api/budgets/overall')
+      .send({ limit: 3500, month: 3, year: 2026 })
+    assert.equal(bobCreated.status, 200)
+    assert.equal(bobCreated.body.data.limit, 3500)
+
+    const aliceOverall = await alice.get('/api/budgets/overall?month=3&year=2026')
+    assert.equal(aliceOverall.body.data.limit, 2000)
+  })
 })
 
 describe('budget spend is calculated per account', () => {
@@ -185,6 +203,26 @@ describe('budget spend is calculated per account', () => {
 
     assert.equal(aliceBudgets.body.data[0].spent, 100)
     assert.equal(bobBudgets.body.data[0].spent, 400)
+  })
+
+  it('only counts the caller\'s own transactions in overall budget spend', async () => {
+    await alice.post('/api/transactions').send(
+      transactionPayload({ amount: 150, type: 'expense', category: 'shopping', date: '2026-03-10' }),
+    )
+    await bob.post('/api/transactions').send(
+      transactionPayload({ amount: 600, type: 'expense', category: 'shopping', date: '2026-03-11' }),
+    )
+
+    await alice.put('/api/budgets/overall').send({ limit: 1000, month: 3, year: 2026 })
+    await bob.put('/api/budgets/overall').send({ limit: 1000, month: 3, year: 2026 })
+
+    const aliceOverall = await alice.get('/api/budgets/overall?month=3&year=2026')
+    const bobOverall = await bob.get('/api/budgets/overall?month=3&year=2026')
+
+    assert.equal(aliceOverall.body.data.spent, 150)
+    assert.equal(aliceOverall.body.data.remaining, 850)
+    assert.equal(bobOverall.body.data.spent, 600)
+    assert.equal(bobOverall.body.data.remaining, 400)
   })
 })
 

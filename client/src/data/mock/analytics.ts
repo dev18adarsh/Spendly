@@ -453,15 +453,37 @@ export function buildBudgets(
     )
   }
 
-  return limits.map((limit) => ({
-    id: `budget_${limit.categoryId}`,
-    categoryId: limit.categoryId,
-    name: limit.name,
-    limit: limit.limit,
-    spent: spentByCategory.get(limit.categoryId) ?? 0,
-    color: limit.color,
-    period: 'monthly' as const,
-  }))
+  return limits.map((limit) => {
+    const spent = Math.round((spentByCategory.get(limit.categoryId) ?? 0) * 100) / 100
+    const remaining = Math.round((limit.limit - spent) * 100) / 100
+    const percentUsed =
+      limit.limit > 0
+        ? Math.round((spent / limit.limit) * 1000) / 10
+        : spent > 0
+          ? 100
+          : 0
+    const status =
+      spent >= limit.limit
+        ? ('over' as const)
+        : limit.limit > 0 && spent / limit.limit >= 0.85
+          ? ('approaching' as const)
+          : ('ok' as const)
+
+    return {
+      id: `budget_${limit.categoryId}`,
+      categoryId: limit.categoryId,
+      name: limit.name,
+      limit: limit.limit,
+      spent,
+      remaining,
+      percentUsed,
+      status,
+      month: now.getMonth() + 1,
+      year: now.getFullYear(),
+      color: limit.color,
+      period: 'monthly' as const,
+    }
+  })
 }
 
 /* ------------------------------------------------------------------ */

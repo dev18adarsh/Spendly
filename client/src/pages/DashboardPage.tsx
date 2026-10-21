@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { ArrowDownRight, ArrowUpRight, PiggyBank, Wallet } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { PageHeader } from '@/components/layout/PageHeader'
 import { BalanceCard } from '@/components/dashboard/BalanceCard'
@@ -37,7 +38,7 @@ export function DashboardPage() {
   const [intervalKey, setIntervalKey] = useState<IntervalKey>(DEFAULT_INTERVAL['30d'])
   const [pendingDelete, setPendingDelete] = useState<Transaction | null>(null)
   const composer = useTransactionComposer()
-  const { summary, cashflow, breakdown, transactions, budgets, categories, balanceSeries } =
+  const { summary, cashflow, breakdown, transactions, budgets, overallBudget, categories, balanceSeries } =
     useDashboardData(range, intervalKey)
 
   /**
@@ -243,13 +244,28 @@ export function DashboardPage() {
           </Card>
 
           <Card>
-            <CardHeader title="Budget progress" description="This month" />
+            <CardHeader
+              title="Budget summary"
+              description="This month"
+              actions={
+                <Link
+                  to="/budgets"
+                  className="rounded-control px-2 py-1 text-xs font-medium text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
+                >
+                  Manage
+                </Link>
+              }
+            />
             <div className="px-5 pb-5">
               <BudgetOverview
                 budgets={budgets.data ?? []}
-                loading={budgets.isLoading}
-                error={budgets.error}
-                onRetry={budgets.refetch}
+                overallBudget={overallBudget.data}
+                loading={budgets.isLoading || overallBudget.isLoading}
+                error={budgets.error ?? overallBudget.error}
+                onRetry={() => {
+                  budgets.refetch()
+                  overallBudget.refetch()
+                }}
               />
             </div>
           </Card>

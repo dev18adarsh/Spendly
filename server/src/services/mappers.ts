@@ -1,9 +1,12 @@
 import { findCategoryDefinition } from '../constants/categories.js'
 import type { TransactionStatus, TransactionType } from '../constants/payment-methods.js'
+import { toMoney } from '../models/model-options.js'
 import type {
   BudgetDto,
+  BudgetStatus,
   CategoryDto,
   CategorySpendDto,
+  OverallBudgetDto,
   TransactionDto,
   UserDto,
 } from '../types/api.js'
@@ -66,6 +69,37 @@ export interface BudgetSource {
   year: number
   createdAt?: Date | string | undefined
   updatedAt?: Date | string | undefined
+}
+
+/** The same shape without a category — used by the overall budget. */
+export type OverallBudgetSource = Omit<BudgetSource, 'category'>
+
+/**
+ * Share of a budget already spent, in percent.
+ *
+ * A limit of zero has no meaningful ratio, so it reports what the bar should
+ * still show: `100` once anything has been spent, `0` while nothing has.
+ */
+export function budgetPercentUsed(limit: number, spent: number): number {
+  if (limit > 0) return Math.round((spent / limit) * 1000) / 10
+  return spent > 0 ? 100 : 0
+}
+
+/**
+ * The single place a budget is judged, so every surface agrees.
+ *
+ * - `over` — spending reached the limit. Any spend against a zero limit
+ *   counts too, because a zero limit means "nothing may be spent".
+ * - `approaching` — at least `APPROACHING_THRESHOLD` of the limit is gone.
+ * - `ok` — everything else, including an untouched budget.
+ */
+export const APPROACHING_THRESHOLD = 0.85
+
+export function budgetStatus(limit: number, spent: number): BudgetStatus {
+  if (spent <= 0) return 'ok'
+  if (spent >= limit) return 'over'
+  if (limit > 0 && spent / limit >= APPROACHING_THRESHOLD) return 'approaching'
+  return 'ok'
 }
 
 export interface CategorySource {
@@ -133,6 +167,27 @@ export function toBudgetDto(budget: BudgetSource, meta: CategoryMeta, spent: num
     categoryIcon: meta.icon,
     limit: budget.limit,
     spent,
+    remaining: toMoney(budget.limit - spent),
+    percentUsed: budgetPercentUsed(budget.limit, spent),
+    status: budgetStatus(budget.limit, spent),
+    month: budget.month,
+    year: budget.year,
+    period: 'monthly',
+    createdAt,
+    updatedAt: toIso(budget.updatedAt, createdAt),
+  }
+}
+
+export function toOverallBudgetDto(budget: OverallBudgetSource, spent: number): OverallBudgetDto {
+  const createdAt = toIso(budget.createdAt, new Date(0).toISOString())
+
+  return {
+    id: resolveId(budget),
+    limit: budget.limit,
+    spent,
+    remaining: toMoney(budget.limit - spent),
+    percentUsed: budgetPercentUsed(budget.limit, spent),
+    status: budgetStatus(budget.limit, spent),
     month: budget.month,
     year: budget.year,
     period: 'monthly',

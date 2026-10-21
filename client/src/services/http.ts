@@ -2,10 +2,13 @@ import type {
   AuthApi,
   AuthUser,
   Budget,
+  BudgetQuery,
   CashflowPoint,
   Category,
   CategorySpend,
   LoginInput,
+  OverallBudget,
+  OverallBudgetDraft,
   RegisterInput,
   SpendlyApi,
   SummaryMetrics,
@@ -134,9 +137,29 @@ interface ServerBudget {
   category: string
   categoryName: string
   categoryColor: string
+  categoryIcon?: string
   limit: number
   spent: number
+  remaining?: number
+  percentUsed?: number
+  status?: 'ok' | 'approaching' | 'over'
+  month?: number
+  year?: number
   period: 'monthly'
+}
+
+interface ServerOverallBudget {
+  id: string
+  limit: number
+  spent: number
+  remaining: number
+  percentUsed: number
+  status: 'ok' | 'approaching' | 'over'
+  month: number
+  year: number
+  period: 'monthly'
+  createdAt?: string
+  updatedAt?: string
 }
 
 interface ServerCategory {
@@ -201,14 +224,58 @@ function toClientTransaction(dto: ServerTransaction): Transaction {
 }
 
 function toClientBudget(dto: ServerBudget): Budget {
+  const remaining =
+    typeof dto.remaining === 'number'
+      ? dto.remaining
+      : Math.round((dto.limit - dto.spent) * 100) / 100
+
+  const percentUsed =
+    typeof dto.percentUsed === 'number'
+      ? dto.percentUsed
+      : dto.limit > 0
+        ? Math.round((dto.spent / dto.limit) * 1000) / 10
+        : dto.spent > 0
+          ? 100
+          : 0
+
+  const status =
+    dto.status ??
+    (dto.spent >= dto.limit
+      ? 'over'
+      : dto.limit > 0 && dto.spent / dto.limit >= 0.85
+        ? 'approaching'
+        : 'ok')
+
   return {
     id: dto.id,
     categoryId: dto.category,
     name: dto.categoryName,
     limit: dto.limit,
     spent: dto.spent,
+    remaining,
+    percentUsed,
+    status,
+    month: dto.month,
+    year: dto.year,
+    icon: dto.categoryIcon,
     color: dto.categoryColor,
     period: dto.period,
+  }
+}
+
+function toClientOverallBudget(dto: ServerOverallBudget): OverallBudget {
+  return {
+    id: dto.id,
+    limit: dto.limit,
+    spent: dto.spent,
+    remaining: dto.remaining,
+    percentUsed: dto.percentUsed,
+    status: dto.status,
+    month: dto.month,
+    year: dto.year,
+    period: dto.period,
+    createdAt: dto.createdAt,
+    updatedAt: dto.updatedAt,
   }
 }
 
@@ -503,9 +570,34 @@ export function createHttpClient(baseUrl: string): SpendlyApi {
       )
       return transactions.map(toClientTransaction)
     },
-    async getBudgets(signal) {
-      const budgets = await request<ServerBudget[]>(`${root}/budgets`, { signal })
+    async getBudgets(
+      queryOrSignal?: BudgetQuery | AbortSignal,
+      maybeSignal?: AbortSignal,
+    ): Promise<Budget[]> {
+      const query = queryOrSignal instanceof AbortSignal ? undefined : queryOrSignal
+      const signal = queryOrSignal instanceof AbortSignal ? queryOrSignal : maybeSignal
+
+      const params = new URLSearchParams()
+      if (query?.month) params.set('month', String(query.month))
+      if (query?.year) params.set('year', String(query.year))
+      params.set('tz', currentTimeZone())
+
+      const queryString = params.toString() ? `?${params.toString()}` : ''
+      const budgets = await request<ServerBudget[]>(`${root}/budgets${queryString}`, { signal })
       return budgets.map(toClientBudget)
+    },
+    async getOverallBudget(
+      query?: BudgetQuery,
+      signal?: AbortSignal,
+    ): Promise<OverallBudget | null> {
+      const params = new URLSearchParams()
+      if (query?.month) params.set('month', String(query.month))
+      if (query?.year) params.set('year', String(query.year))
+      params.set('tz', currentTimeZone())
+
+      const queryString = params.toString() ? `?${params.toString()}` : ''
+      const overall = await request<ServerOverallBudget | null>(`${root}/budgets/overall${queryString}`, { signal })
+      return overall ? toClientOverallBudget(overall) : null
     },
     async getCategories(signal) {
       const categories = await request<ServerCategory[]>(`${root}/categories`, { signal })
@@ -544,9 +636,42 @@ export function createHttpClient(baseUrl: string): SpendlyApi {
           limit: draft.limit,
           month: draft.month ?? now.getMonth() + 1,
           year: draft.year ?? now.getFullYear(),
+          tz: currentTimeZone(),
         },
       })
       return toClientBudget(budget)
+    },
+    async updateBudget(id, limit) {
+      const budget = await request<ServerBudget>(`${root}/budgets/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: { limit },
+      })
+      return toClientBudget(budget)
+    },
+    async deleteBudget(id) {
+      await request<void>(`${root}/budgets/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    },
+    async saveOverallBudget(draft: OverallBudgetDraft): Promise<OverallBudget> {
+      const now = new Date()
+      const budget = await request<ServerOverallBudget>(`${root}/budgets/overall`, {
+        method: 'PUT',
+        body: {
+          limit: draft.limit,
+          month: draft.month ?? now.getMonth() + 1,
+          year: draft.year ?? now.getFullYear(),
+          tz: currentTimeZone(),
+        },
+      })
+      return toClientOverallBudget(budget)
+    },
+    async deleteOverallBudget(query?: BudgetQuery): Promise<void> {
+      const params = new URLSearchParams()
+      if (query?.month) params.set('month', String(query.month))
+      if (query?.year) params.set('year', String(query.year))
+      params.set('tz', currentTimeZone())
+
+      const queryString = params.toString() ? `?${params.toString()}` : ''
+      await request<void>(`${root}/budgets/overall${queryString}`, { method: 'DELETE' })
     },
   }
 }

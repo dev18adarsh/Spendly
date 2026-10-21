@@ -232,3 +232,204 @@ describe('DELETE /api/budgets/:id', () => {
     assert.equal(list.body.data.length, 0)
   })
 })
+
+describe('GET /api/budgets/overall', () => {
+  it('returns null when no overall budget is set', async () => {
+    const response = await client.get('/api/budgets/overall')
+
+    assert.equal(response.status, 200)
+    assert.equal(response.body.success, true)
+    assert.equal(response.body.data, null)
+  })
+
+  it('returns the overall budget for the requested month', async () => {
+    await client
+      .put('/api/budgets/overall')
+      .send({ limit: 2000, month: currentMonth, year: currentYear })
+
+    const response = await client.get(
+      `/api/budgets/overall?month=${currentMonth}&year=${currentYear}`,
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(response.body.data.limit, 2000)
+    assert.equal(response.body.data.spent, 0)
+    assert.equal(response.body.data.remaining, 2000)
+    assert.equal(response.body.data.status, 'ok')
+    assert.equal(response.body.data.month, currentMonth)
+    assert.equal(response.body.data.year, currentYear)
+    assert.equal(response.body.data.period, 'monthly')
+  })
+
+  it('does not return overall budget from another month', async () => {
+    await client
+      .put('/api/budgets/overall')
+      .send({ limit: 1500, month: currentMonth, year: currentYear })
+
+    const otherMonth = currentMonth === 1 ? 2 : 1
+    const response = await client.get(
+      `/api/budgets/overall?month=${otherMonth}&year=${currentYear}`,
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(response.body.data, null)
+  })
+})
+
+describe('PUT and POST /api/budgets/overall', () => {
+  it('creates an overall budget and updates it without duplicating', async () => {
+    const created = await client
+      .post('/api/budgets/overall')
+      .send({ limit: 1000, month: currentMonth, year: currentYear })
+
+    assert.equal(created.status, 200)
+    assert.equal(created.body.data.limit, 1000)
+    assert.ok(created.body.data.id)
+
+    const updated = await client
+      .put('/api/budgets/overall')
+      .send({ limit: 1200, month: currentMonth, year: currentYear })
+
+    assert.equal(updated.status, 200)
+    assert.equal(updated.body.data.id, created.body.data.id)
+    assert.equal(updated.body.data.limit, 1200)
+
+    const fetched = await client.get(
+      `/api/budgets/overall?month=${currentMonth}&year=${currentYear}`,
+    )
+    assert.equal(fetched.body.data.limit, 1200)
+  })
+
+  it('calculates total spent across all categories excluding income', async () => {
+    // Add expenses in different categories
+    await client.post('/api/transactions').send(
+      transactionPayload({
+        amount: 300,
+        type: 'expense',
+        category: 'food',
+        description: 'Groceries',
+        date: new Date(Date.UTC(currentYear, currentMonth - 1, 10)).toISOString(),
+      }),
+    )
+    await client.post('/api/transactions').send(
+      transactionPayload({
+        amount: 200,
+        type: 'expense',
+        category: 'transport',
+        description: 'Train',
+        date: new Date(Date.UTC(currentYear, currentMonth - 1, 12)).toISOString(),
+      }),
+    )
+    // Add income (must be excluded!)
+    await client.post('/api/transactions').send(
+      transactionPayload({
+        amount: 5000,
+        type: 'income',
+        category: 'income',
+        description: 'Salary',
+        date: new Date(Date.UTC(currentYear, currentMonth - 1, 1)).toISOString(),
+      }),
+    )
+
+    const response = await client
+      .put('/api/budgets/overall')
+      .send({ limit: 1000, month: currentMonth, year: currentYear })
+
+    assert.equal(response.status, 200)
+    assert.equal(response.body.data.spent, 500)
+    assert.equal(response.body.data.remaining, 500)
+    assert.equal(response.body.data.percentUsed, 50)
+    assert.equal(response.body.data.status, 'ok')
+  })
+
+  it('detects approaching and exceeded overall budgets', async () => {
+    await client
+      .put('/api/budgets/overall')
+      .send({ limit: 100, month: currentMonth, year: currentYear })
+
+    // Spend 88 -> status is 'approaching' (>= 85%)
+    await client.post('/api/transactions').send(
+      transactionPayload({
+        amount: 88,
+        type: 'expense',
+        category: 'shopping',
+        description: 'Clothes',
+        date: new Date(Date.UTC(currentYear, currentMonth - 1, 15)).toISOString(),
+      }),
+    )
+
+    const approaching = await client.get(
+      `/api/budgets/overall?month=${currentMonth}&year=${currentYear}`,
+    )
+    assert.equal(approaching.body.data.spent, 88)
+    assert.equal(approaching.body.data.status, 'approaching')
+    assert.equal(approaching.body.data.remaining, 12)
+
+    // Spend 20 more -> total 108 -> status is 'over' (> 100%)
+    await client.post('/api/transactions').send(
+      transactionPayload({
+        amount: 20,
+        type: 'expense',
+        category: 'entertainment',
+        description: 'Movie',
+        date: new Date(Date.UTC(currentYear, currentMonth - 1, 16)).toISOString(),
+      }),
+    )
+
+    const over = await client.get(
+      `/api/budgets/overall?month=${currentMonth}&year=${currentYear}`,
+    )
+    assert.equal(over.body.data.spent, 108)
+    assert.equal(over.body.data.status, 'over')
+    assert.equal(over.body.data.remaining, -8)
+    assert.equal(over.body.data.percentUsed, 108)
+  })
+
+  it('rejects a negative limit for overall budget', async () => {
+    const response = await client
+      .put('/api/budgets/overall')
+      .send({ limit: -50, month: currentMonth, year: currentYear })
+
+    assert.equal(response.status, 422)
+  })
+})
+
+describe('DELETE /api/budgets/overall', () => {
+  it('removes the overall budget for the period', async () => {
+    await client
+      .put('/api/budgets/overall')
+      .send({ limit: 1500, month: currentMonth, year: currentYear })
+
+    const deleted = await client.delete(
+      `/api/budgets/overall?month=${currentMonth}&year=${currentYear}`,
+    )
+    assert.equal(deleted.status, 204)
+
+    const fetched = await client.get(
+      `/api/budgets/overall?month=${currentMonth}&year=${currentYear}`,
+    )
+    assert.equal(fetched.body.data, null)
+  })
+
+  it('returns 404 when deleting a non-existent overall budget', async () => {
+    const deleted = await client.delete(
+      `/api/budgets/overall?month=${currentMonth}&year=${currentYear}`,
+    )
+    assert.equal(deleted.status, 404)
+  })
+
+  it('allows removing an overall budget by ID as well', async () => {
+    const created = await client
+      .put('/api/budgets/overall')
+      .send({ limit: 1500, month: currentMonth, year: currentYear })
+
+    const deleted = await client.delete(`/api/budgets/${created.body.data.id}`)
+    assert.equal(deleted.status, 204)
+
+    const fetched = await client.get(
+      `/api/budgets/overall?month=${currentMonth}&year=${currentYear}`,
+    )
+    assert.equal(fetched.body.data, null)
+  })
+})
+

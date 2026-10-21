@@ -3,8 +3,11 @@ import { Router } from 'express'
 import {
   createBudget,
   deleteBudget,
+  deleteOverallBudget,
   getBudget,
+  getOverallBudget,
   listBudgets,
+  saveOverallBudget,
   updateBudget,
   upsertBudget,
 } from '../controllers/budget.controller.js'
@@ -15,6 +18,8 @@ import { validate } from '../middleware/validate.js'
 import { idParamSchema } from '../validators/common.js'
 import {
   listBudgetsQuerySchema,
+  overallBudgetQuerySchema,
+  overallBudgetSchema,
   updateBudgetSchema,
   upsertBudgetSchema,
 } from '../validators/budget.validator.js'
@@ -45,6 +50,40 @@ budgetRouter.put(
   csrfProtection,
   upsertBudget,
 )
+
+/** Overall monthly spending budget */
+budgetRouter.get(
+  '/overall',
+  validate(overallBudgetQuerySchema, 'query'),
+  requireDatabase,
+  requireAuth,
+  getOverallBudget,
+)
+budgetRouter.put(
+  '/overall',
+  validate(overallBudgetSchema, 'body'),
+  requireDatabase,
+  requireAuth,
+  csrfProtection,
+  saveOverallBudget,
+)
+budgetRouter.post(
+  '/overall',
+  validate(overallBudgetSchema, 'body'),
+  requireDatabase,
+  requireAuth,
+  csrfProtection,
+  saveOverallBudget,
+)
+budgetRouter.delete(
+  '/overall',
+  validate(overallBudgetQuerySchema, 'query'),
+  requireDatabase,
+  requireAuth,
+  csrfProtection,
+  deleteOverallBudget,
+)
+
 
 budgetRouter.get(
   '/:id',

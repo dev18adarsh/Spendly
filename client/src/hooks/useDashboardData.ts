@@ -25,6 +25,7 @@ export function useDashboardData(range: DateRangeKey, interval: IntervalKey) {
     [range],
   )
   const budgets = useAsyncData((signal) => api.getBudgets(signal), [])
+  const overallBudget = useAsyncData((signal) => api.getOverallBudget(undefined, signal), [])
   const categories = useCategories()
 
   /**
@@ -44,6 +45,7 @@ export function useDashboardData(range: DateRangeKey, interval: IntervalKey) {
     breakdown,
     transactions,
     budgets,
+    overallBudget,
     categories,
     balanceSeries,
   }

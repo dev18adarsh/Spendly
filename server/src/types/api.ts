@@ -21,6 +21,9 @@ export interface TransactionDto {
   updatedAt: string
 }
 
+/** How close a budget already is to its limit. */
+export type BudgetStatus = 'ok' | 'approaching' | 'over'
+
 /** A monthly budget as returned by the API. */
 export interface BudgetDto {
   id: string
@@ -32,6 +35,31 @@ export interface BudgetDto {
   limit: number
   /** Amount already spent in the budget's month, computed from transactions. */
   spent: number
+  /** `limit - spent`; negative once the budget is exceeded. */
+  remaining: number
+  /** Share of the limit already spent, in percent. */
+  percentUsed: number
+  /** Derived from `spent` against `limit` — see `APPROACHING_THRESHOLD`. */
+  status: BudgetStatus
+  month: number
+  year: number
+  period: 'monthly'
+  createdAt: string
+  updatedAt: string
+}
+
+/** The overall monthly spending budget as returned by the API. */
+export interface OverallBudgetDto {
+  id: string
+  /** Ceiling on everything spent in the month. */
+  limit: number
+  /** Total spent in the month across every category, income excluded. */
+  spent: number
+  /** `limit - spent`; negative once the budget is exceeded. */
+  remaining: number
+  /** Share of the limit already spent, in percent. */
+  percentUsed: number
+  status: BudgetStatus
   month: number
   year: number
   period: 'monthly'

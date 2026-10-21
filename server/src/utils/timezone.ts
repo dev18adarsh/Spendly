@@ -234,6 +234,48 @@ export function zonedAdd(
   return zonedTimeToUtc({ year, month: parts.month, day, hour: parts.hour, minute: parts.minute, second: parts.second }, timeZone)
 }
 
+/**
+ * The half-open `[start, end)` range of a calendar month in a zone.
+ *
+ * The month opens at local midnight on the 1st and closes at local midnight
+ * on the 1st of the next month, so a purchase at 23:30 on the 31st always
+ * belongs to that month — which is what makes months of different lengths
+ * and the December-to-January rollover behave.
+ */
+export function monthRangeInZone(
+  year: number,
+  month: number,
+  timeZone: string,
+): { start: Date; end: Date } {
+  const start = zonedTimeToUtc({ year, month, day: 1, hour: 0, minute: 0, second: 0 }, timeZone)
+
+  // `Date.UTC(year, month, 1)` rolls `month` (1-based) into the next year
+  // on its own, so December's end is January the following year.
+  const next = new Date(Date.UTC(year, month, 1))
+  const end = zonedTimeToUtc(
+    {
+      year: next.getUTCFullYear(),
+      month: next.getUTCMonth() + 1,
+      day: 1,
+      hour: 0,
+      minute: 0,
+      second: 0,
+    },
+    timeZone,
+  )
+
+  return { start, end }
+}
+
+/** The calendar month containing an instant, read in the given zone. */
+export function currentMonthInZone(
+  timeZone: string,
+  now: Date = new Date(),
+): { month: number; year: number } {
+  const parts = getZonedParts(now, timeZone)
+  return { month: parts.month, year: parts.year }
+}
+
 /** Formats an instant as a date in the given zone. */
 export function formatZonedDate(
   instant: Date,

@@ -74,14 +74,36 @@ export interface ReportingPeriod {
   timeZone: string
 }
 
+export type BudgetStatus = 'ok' | 'approaching' | 'over'
+
 export interface Budget {
   id: string
   categoryId: string
   name: string
   limit: number
   spent: number
+  remaining: number
+  percentUsed: number
+  status: BudgetStatus
+  month?: number
+  year?: number
   color: string
+  icon?: string
   period: BudgetPeriod
+}
+
+export interface OverallBudget {
+  id: string
+  limit: number
+  spent: number
+  remaining: number
+  percentUsed: number
+  status: BudgetStatus
+  month: number
+  year: number
+  period: BudgetPeriod
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface MetricChange {

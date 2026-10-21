@@ -4,8 +4,11 @@ import type { z } from 'zod'
 import { currentUser } from '../middleware/authenticate.js'
 import {
   deleteBudget as deleteBudgetService,
+  deleteOverallBudget as deleteOverallBudgetService,
   getBudgetById,
+  getOverallBudget as getOverallBudgetService,
   listBudgets as listBudgetsService,
+  saveOverallBudget as saveOverallBudgetService,
   updateBudgetById,
   upsertBudget as upsertBudgetService,
 } from '../services/budget.service.js'
@@ -16,6 +19,8 @@ import { validated } from '../utils/validated.js'
 import { idParamSchema } from '../validators/common.js'
 import type {
   ListBudgetsQuery,
+  OverallBudgetInput,
+  OverallBudgetQuery,
   UpdateBudgetInput,
   UpsertBudgetInput,
 } from '../validators/budget.validator.js'
@@ -89,3 +94,35 @@ export const deleteBudget = asyncHandler(async (request: Request, response: Resp
 
   sendNoContent(response)
 })
+
+/** `GET /api/budgets/overall` — overall monthly spending budget. */
+export const getOverallBudget = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
+  const query = validated<OverallBudgetQuery>(request, 'query')
+  const budget = await getOverallBudgetService(userId, query)
+
+  sendSuccess(response, budget)
+})
+
+/** `PUT /api/budgets/overall` — set or update the overall monthly spending budget. */
+export const saveOverallBudget = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
+  const input = validated<OverallBudgetInput>(request, 'body')
+  const budget = await saveOverallBudgetService(userId, input)
+
+  sendSuccess(response, budget)
+})
+
+/** `DELETE /api/budgets/overall` — remove the overall monthly budget for a period. */
+export const deleteOverallBudget = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
+  const query = validated<OverallBudgetQuery>(request, 'query')
+  const deleted = await deleteOverallBudgetService(userId, query)
+
+  if (!deleted) {
+    throw ApiError.notFound('No overall budget found for this period.')
+  }
+
+  sendNoContent(response)
+})
+
