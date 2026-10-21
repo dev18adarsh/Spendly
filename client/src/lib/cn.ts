@@ -1,0 +1,10 @@
+import { clsx, type ClassValue } from 'clsx'
+import { twMerge } from 'tailwind-merge'
+
+/**
+ * Merge conditional class names, resolving conflicting Tailwind utilities so
+ * consumer-supplied `className` props always win over component defaults.
+ */
+export function cn(...inputs: ClassValue[]): string {
+  return twMerge(clsx(inputs))
+}
