@@ -11,8 +11,9 @@ export type * from './types'
 /**
  * The single data source the UI depends on.
  *
- * Today it resolves to the mock implementation (sample data, no network, no
- * persistence). Setting `VITE_DATA_SOURCE=api` swaps in the Express client
- * without touching a single component.
+ * It resolves to the mock implementation by default (sample data, no network).
+ * Setting `VITE_DATA_SOURCE=api` swaps in the Express client — which reads
+ * live transactions, budgets and analytics from MongoDB — without touching a
+ * single component.
  */
 export const api: SpendlyApi = config.dataSource === 'api' ? createHttpClient(config.apiBaseUrl) : mockApi

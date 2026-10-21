@@ -1,8 +1,10 @@
 import cors from 'cors'
 import express, { type Express } from 'express'
+import helmet from 'helmet'
 
 import { env } from './config/env.js'
-import { errorHandler, notFoundHandler } from './middleware/error-handler.js'
+import { errorHandler } from './middleware/error-handler.js'
+import { notFoundHandler } from './middleware/not-found.js'
 import { apiRouter } from './routes/index.js'
 
 /**
@@ -13,11 +15,16 @@ export function createApp(): Express {
   const app = express()
 
   app.disable('x-powered-by')
+  app.set('trust proxy', 1)
+
+  app.use(helmet())
 
   app.use(
     cors({
+      // Only the configured frontend origins may call the API from a browser.
       origin: env.corsOrigins,
       credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   )
 
@@ -26,9 +33,20 @@ export function createApp(): Express {
 
   app.get('/', (_request, response) => {
     response.json({
-      name: 'Spendly API',
-      version: '0.1.0',
-      docs: '/api/health',
+      success: true,
+      data: {
+        name: 'Spendly API',
+        version: '0.2.0',
+        environment: env.nodeEnv,
+        endpoints: {
+          health: '/api/health',
+          readiness: '/api/health/ready',
+          transactions: '/api/transactions',
+          budgets: '/api/budgets',
+          categories: '/api/categories',
+          analytics: '/api/analytics/summary',
+        },
+      },
     })
   })
 

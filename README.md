@@ -1,13 +1,11 @@
 # Spendly
 
-A premium, dark-themed expense tracking web application.
+A premium, dark-themed expense tracking web application — a React dashboard on top of a
+real Express + MongoDB backend.
 
-This repository is the **foundation stage**: a production-quality frontend shell with a
-clean backend scaffold, running on realistic sample data.
-
-> **Nothing is persisted yet.** The UI reads from a bundled sample ledger, and the API
-> exposes a health probe only. No data is written to MongoDB Atlas, and no transactions
-> or budgets are saved anywhere.
+Transactions, monthly budgets and the dashboard analytics live in MongoDB. The API
+computes every figure from actual documents; there is no sample data hiding behind a
+successful-looking response.
 
 ## Stack
 
@@ -17,8 +15,9 @@ clean backend scaffold, running on realistic sample data.
 | Styling | Tailwind CSS 4 (CSS-first `@theme` tokens) |
 | Charts | Recharts 3 |
 | Icons | Lucide React |
-| Backend | Node.js · Express 5 · TypeScript |
-| Database | MongoDB Atlas (via Mongoose — connection scaffold only) |
+| Backend | Node.js · Express 5 · TypeScript · Zod |
+| Database | MongoDB Atlas (via Mongoose 9) |
+| Tests | Node test runner · Supertest · mongodb-memory-server |
 
 ## Repository layout
 
@@ -40,12 +39,20 @@ spendly/
 │   │   ├── services/          # Data-source seam (mock ⇄ HTTP)
 │   │   └── types/             # Shared domain model
 │   └── .env.example
-└── server/                    # Express API scaffold
+└── server/                    # Express + MongoDB API
     ├── src/
-    │   ├── config/            # Environment parsing
-    │   ├── db/                # MongoDB Atlas connection helper
-    │   ├── middleware/        # Error + not-found handlers
-    │   ├── routes/            # Health probe (transaction routes planned)
+    │   ├── config/            # Environment parsing and the MongoDB connection
+    │   ├── constants/         # Category taxonomy and shared enumerations
+    │   ├── models/            # Mongoose schemas
+    │   ├── services/          # Data access and aggregations
+    │   ├── controllers/       # HTTP handlers
+    │   ├── routes/            # Route tables
+    │   ├── middleware/        # Validation, database guard, error handling
+    │   ├── validators/        # Zod request schemas
+    │   ├── utils/             # Response envelope, pagination, ApiError
+    │   ├── types/             # API DTOs
+    │   ├── scripts/           # Operational scripts
+    │   ├── test/              # Integration tests
     │   ├── app.ts             # Express app factory
     │   └── index.ts           # Server bootstrap
     └── .env.example
@@ -54,18 +61,23 @@ spendly/
 ## Getting started
 
 ```bash
-npm install          # installs the client and server workspaces
-npm run dev          # starts the Vite dev server on http://localhost:5173
-npm run dev:server   # starts the Express API on http://localhost:4000
+npm install            # installs the client and server workspaces
+cp server/.env.example server/.env
+# …then add your MongoDB Atlas connection string to server/.env
+
+npm run dev            # starts the Vite dev server on http://localhost:5173
+npm run dev:server     # starts the Express API on http://localhost:4000
 ```
 
 Other scripts:
 
 ```bash
 npm run typecheck    # tsc for both workspaces
+npm run test         # server integration tests (in-memory MongoDB)
 npm run build        # production build for both workspaces
 npm run preview      # preview the built client
 npm run start:server # run the compiled API (after npm run build)
+npm run seed         # seed the category taxonomy
 ```
 
 ## How data flows
@@ -74,22 +86,50 @@ The UI never talks to a data source directly — it depends on the `SpendlyApi` 
 in `client/src/services/types.ts`:
 
 ```
-components ─▶ useAsyncData ─▶ services/index.ts ─┬─▶ services/mock/client.ts   (today)
-                                                 └─▶ services/http.ts          (next)
-                                                        │
-                                                        ▼
-                                                  Express API → MongoDB Atlas
+components ─▶ useAsyncData ─▶ services/index.ts ─┬─▶ services/mock/client.ts   (sample data)
+                                                  └─▶ services/http.ts          (live API)
+                                                         │
+                                                         ▼
+                                                   Express API → MongoDB Atlas
 ```
 
-* **Today** the default source is the mock client, which serves the sample ledger in
-  `client/src/data/mock/` with simulated latency so loading and error states are real.
-* **Next** set `VITE_DATA_SOURCE=api` in `client/.env.local`. The HTTP client already
-  speaks the final contract; the server routes listed in `server/src/routes/index.ts`
-  are the remaining work.
+* **Mock** (default) serves the sample ledger in `client/src/data/mock/` with simulated
+  latency, so loading and error states are real while you work offline.
+* **API** is wired up end-to-end. Set `VITE_DATA_SOURCE=api` in `client/.env.local` and
+  the same components read from the server: the HTTP adapter unwraps the response
+  envelope, translates the client's `range`/`categoryId` vocabulary into the API's
+  `from`/`to`/`category` parameters, and maps the server DTOs onto the shapes the UI
+  renders.
 
-Sample data is derived, not hand-tuned per screen: `client/src/data/mock/analytics.ts`
-turns one ledger into every series, breakdown, summary and budget, so the dashboard,
-transactions list and budgets page always agree with each other.
+The server is the source of truth for the live path; the mock layer exists so the
+frontend stays usable without a database.
+
+## The API
+
+A JSON REST API under `/api`, documented in detail in [`server/README.md`](server/README.md).
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/health` | Liveness probe with the database state and connection error |
+| `GET` | `/api/health/ready` | Readiness probe — `503` while MongoDB is unavailable |
+| `GET` `POST` | `/api/transactions` | List (filtered, sorted, paginated) and create |
+| `GET` `PATCH` `DELETE` | `/api/transactions/:id` | Read, update and remove a transaction |
+| `GET` `POST` `PUT` | `/api/budgets` | Monthly budgets, with the amount already spent |
+| `GET` `PATCH` `DELETE` | `/api/budgets/:id` | Read, update and remove a budget |
+| `GET` | `/api/categories` | The category taxonomy |
+| `GET` | `/api/analytics/summary` | Balance, income, expenses, savings rate |
+| `GET` | `/api/analytics/cashflow` | Income/expense series over a range |
+| `GET` | `/api/analytics/categories` | Spend per category with share of total |
+| `GET` | `/api/analytics/merchants` | Merchants ranked by spend |
+
+Every response uses the same envelope — `{ success, data, meta }` or
+`{ success, false, error }` — and every failure carries a status, a stable code and a
+human-readable message. Credentials never leave the server: the MongoDB URI is read
+from the environment, redacted in logs, and never exposed to the browser.
+
+If MongoDB cannot be reached, the API says so plainly — `503 DATABASE_UNAVAILABLE`
+with the connection error — instead of returning an empty result that looks like a
+successful query.
 
 ## Design system
 
@@ -115,7 +155,7 @@ hairline borders, and a single mint accent:
 
 ## Roadmap
 
-1. MongoDB Atlas connection + transaction/budget models.
-2. The planned API routes (`/api/transactions`, `/api/summary`, `/api/analytics/*`, …).
-3. Authentication, account linking and real transaction sync.
-4. Editing, categorisation and budget CRUD against the API.
+1. Authentication and per-account data isolation.
+2. Recurring transactions and import from bank statements.
+3. Budget periods beyond monthly, and per-category rollover.
+4. Real-time updates (server-sent events) for the dashboard.

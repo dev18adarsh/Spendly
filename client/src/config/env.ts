@@ -5,8 +5,8 @@
  *   - `mock` (default) → sample data in `src/data/mock`
  *   - `api`            → the Express API (see `src/services/http.ts`)
  *
- * No value is persisted anywhere; switching the source only changes where the
- * read-only sample data comes from.
+ * Only these two public values are exposed to the browser — database
+ * credentials and other secrets stay on the server.
  */
 export type DataSource = 'mock' | 'api'
 

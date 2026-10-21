@@ -1,22 +1,15 @@
 import { Router } from 'express'
 
+import { analyticsRouter } from './analytics.routes.js'
+import { budgetRouter } from './budget.routes.js'
+import { categoryRouter } from './category.routes.js'
 import { healthRouter } from './health.routes.js'
+import { transactionRouter } from './transaction.routes.js'
 
 export const apiRouter = Router()
 
 apiRouter.use('/health', healthRouter)
-
-/*
- * Planned routes — intentionally not implemented yet.
- * The client reads from sample data until these land:
- *
- *   GET /api/summary?range=30d
- *   GET /api/analytics/cashflow?range=12m
- *   GET /api/analytics/categories?range=30d
- *   GET /api/analytics/merchants?range=30d
- *   GET /api/transactions?search=&categoryId=&type=&range=
- *   GET /api/budgets
- *   GET /api/categories
- *
- * See `client/src/services/http.ts` for the exact client-side contract.
- */
+apiRouter.use('/transactions', transactionRouter)
+apiRouter.use('/budgets', budgetRouter)
+apiRouter.use('/categories', categoryRouter)
+apiRouter.use('/analytics', analyticsRouter)

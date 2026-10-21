@@ -1,0 +1,86 @@
+import type { Request, Response } from 'express'
+import type { z } from 'zod'
+
+import { env } from '../config/env.js'
+import {
+  createTransaction as createTransactionService,
+  deleteTransaction as deleteTransactionService,
+  getTransactionById,
+  listTransactions as listTransactionsService,
+  updateTransaction as updateTransactionService,
+} from '../services/transaction.service.js'
+import { ApiError } from '../utils/api-error.js'
+import { asyncHandler } from '../utils/async-handler.js'
+import { buildPaginationMeta } from '../utils/pagination.js'
+import { sendNoContent, sendSuccess } from '../utils/response.js'
+import { validated } from '../utils/validated.js'
+import { idParamSchema } from '../validators/common.js'
+import type {
+  CreateTransactionInput,
+  ListTransactionsQuery,
+  UpdateTransactionInput,
+} from '../validators/transaction.validator.js'
+
+type IdParams = z.infer<typeof idParamSchema>
+
+/** `GET /api/transactions` — list with filtering, sorting and pagination. */
+export const listTransactions = asyncHandler(async (request: Request, response: Response) => {
+  const query = validated<ListTransactionsQuery>(request, 'query')
+
+  const limit = Math.min(query.limit, env.maxPageSize)
+  const result = await listTransactionsService({ ...query, limit })
+
+  const meta = buildPaginationMeta(result.total, {
+    page: query.page,
+    limit,
+    skip: (query.page - 1) * limit,
+  })
+
+  sendSuccess(response, result.items, { pagination: meta })
+})
+
+/** `GET /api/transactions/:id` — a single transaction. */
+export const getTransaction = asyncHandler(async (request: Request, response: Response) => {
+  const { id } = validated<IdParams>(request, 'params')
+  const transaction = await getTransactionById(id)
+
+  if (!transaction) {
+    throw ApiError.notFound(`No transaction found with id "${id}".`)
+  }
+
+  sendSuccess(response, transaction)
+})
+
+/** `POST /api/transactions` — create a transaction. */
+export const createTransaction = asyncHandler(async (request: Request, response: Response) => {
+  const input = validated<CreateTransactionInput>(request, 'body')
+  const transaction = await createTransactionService(input)
+
+  sendSuccess(response, transaction, undefined, 201)
+})
+
+/** `PATCH /api/transactions/:id` — partially update a transaction. */
+export const updateTransaction = asyncHandler(async (request: Request, response: Response) => {
+  const { id } = validated<IdParams>(request, 'params')
+  const input = validated<UpdateTransactionInput>(request, 'body')
+
+  const transaction = await updateTransactionService(id, input)
+
+  if (!transaction) {
+    throw ApiError.notFound(`No transaction found with id "${id}".`)
+  }
+
+  sendSuccess(response, transaction)
+})
+
+/** `DELETE /api/transactions/:id` — remove a transaction. */
+export const deleteTransaction = asyncHandler(async (request: Request, response: Response) => {
+  const { id } = validated<IdParams>(request, 'params')
+  const deleted = await deleteTransactionService(id)
+
+  if (!deleted) {
+    throw ApiError.notFound(`No transaction found with id "${id}".`)
+  }
+
+  sendNoContent(response)
+})
