@@ -11,6 +11,11 @@ import {
   listTransactions as listTransactionsService,
   updateTransaction as updateTransactionService,
 } from '../services/transaction.service.js'
+import {
+  emitTransactionCreated,
+  emitTransactionDeleted,
+  emitTransactionUpdated,
+} from '../socket.js'
 import { ApiError } from '../utils/api-error.js'
 import { asyncHandler } from '../utils/async-handler.js'
 import { buildPaginationMeta } from '../utils/pagination.js'
@@ -77,6 +82,8 @@ export const createTransaction = asyncHandler(async (request: Request, response:
   const input = validated<CreateTransactionInput>(request, 'body')
   const transaction = await createTransactionService(userId, input)
 
+  emitTransactionCreated(userId, transaction)
+
   sendSuccess(response, transaction, undefined, 201)
 })
 
@@ -92,6 +99,8 @@ export const updateTransaction = asyncHandler(async (request: Request, response:
     throw ApiError.notFound(`No transaction found with id "${id}".`)
   }
 
+  emitTransactionUpdated(userId, transaction)
+
   sendSuccess(response, transaction)
 })
 
@@ -104,6 +113,8 @@ export const deleteTransaction = asyncHandler(async (request: Request, response:
   if (!deleted) {
     throw ApiError.notFound(`No transaction found with id "${id}".`)
   }
+
+  emitTransactionDeleted(userId, id)
 
   sendNoContent(response)
 })

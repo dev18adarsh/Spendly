@@ -18,6 +18,7 @@ successful-looking response.
 | Backend | Node.js · Express 5 · TypeScript · Zod |
 | Database | MongoDB Atlas (via Mongoose 9) |
 | Auth | Cookie sessions · bcrypt · double-submit CSRF |
+| Real-time | Socket.IO 4 (WebSockets, user-isolated rooms, automatic reconnect recovery) |
 | Tests | Node test runner · Supertest · mongodb-memory-server |
 
 ## Repository layout
@@ -252,6 +253,16 @@ from the environment, redacted in logs, and never exposed to the browser.
 If MongoDB cannot be reached, the API says so plainly — `503 DATABASE_UNAVAILABLE`
 with the connection error — instead of returning an empty result that looks like a
 successful query.
+
+## Real-time synchronization (Socket.IO)
+
+Spendly provides instantaneous real-time synchronization between browser tabs and devices via Socket.IO:
+
+* **Authenticated private rooms:** When a user signs in, their socket joins a private room (`user:<userId>`). Only transactions belonging to that user are dispatched to that room.
+* **Database as source of truth:** Mutations (creates, updates, deletes) are persisted to MongoDB first. Successful writes emit `transaction-created`, `transaction-updated`, or `transaction-deleted` events. Failed database writes never emit mutation events.
+* **Automatic client recovery:** When receiving mutation events, connected clients invalidate their local cache revision and refresh transactions, dashboard summary cards, spending charts, and budget progress without a full-page reload.
+* **Deduplication & reconnect resilience:** Event IDs prevent duplicate execution, and reconnection listeners automatically re-sync state against the REST API.
+* **Clustered deployments:** In production clusters running multiple backend instances behind a load balancer, a distributed adapter such as `@socket.io/redis-adapter` (with Redis Pub/Sub or Streams) or `@socket.io/mongo-adapter` is required to share events across nodes.
 
 ## Design system
 

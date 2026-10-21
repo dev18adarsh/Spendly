@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { useLockBodyScroll } from '@/hooks/useLockBodyScroll'
 import { initialsOf } from '@/lib/user'
+import { RealtimeStatusIndicator } from '@/realtime/RealtimeContext'
 
 import { navigation } from './navigation'
 
@@ -87,6 +88,8 @@ export function Topbar() {
           </form>
 
           <div className="ml-auto flex items-center gap-1.5 md:ml-0">
+            <RealtimeStatusIndicator />
+
             <Button
               variant="ghost"
               size="icon"

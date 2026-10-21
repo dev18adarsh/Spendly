@@ -1,12 +1,17 @@
+import { createServer } from 'node:http'
+
 import { createApp } from './app.js'
 import { connectToDatabase, disconnectFromDatabase } from './config/database.js'
 import { assertEnvIsValid, env } from './config/env.js'
 import { seedCategories } from './services/category.service.js'
+import { closeSocketServer, initSocketServer } from './socket.js'
 
 async function main(): Promise<void> {
   assertEnvIsValid()
 
   const app = createApp()
+  const httpServer = createServer(app)
+  initSocketServer(httpServer)
 
   try {
     await connectToDatabase()
@@ -29,15 +34,17 @@ async function main(): Promise<void> {
     console.error('[api] Starting without a database. Data routes will return 503.')
   }
 
-  const server = app.listen(env.port, () => {
+  httpServer.listen(env.port, () => {
     console.log(`[api] Spendly API listening on http://localhost:${env.port}`)
     console.log(`[api] Health probe: http://localhost:${env.port}/api/health`)
     console.log(`[api] Allowed CORS origins: ${env.corsOrigins.join(', ')}`)
+    console.log(`[socket] Real-time synchronization active on ws://localhost:${env.port}`)
   })
 
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`[api] ${signal} received - shutting down.`)
-    server.close(async () => {
+    await closeSocketServer()
+    httpServer.close(async () => {
       await disconnectFromDatabase()
       process.exit(0)
     })

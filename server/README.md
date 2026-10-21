@@ -353,6 +353,35 @@ models require it, so those documents are no longer reachable through the API �
 them or backfill them with the id of an account before switching the client over to
 `VITE_DATA_SOURCE=api`.
 
+## Real-time Synchronization (Socket.IO)
+
+Spendly features instant, real-time synchronization across connected tabs and devices using Socket.IO.
+The REST API and MongoDB persistence remain the single source of truth: mutations are committed to the database first, and only upon successful completion are real-time events emitted.
+
+### Event Protocol
+
+Events are emitted strictly to private user rooms (`user:<userId>`) and never broadcast globally:
+* `transaction-created` — emitted when a transaction is successfully persisted
+* `transaction-updated` — emitted when a transaction is successfully updated
+* `transaction-deleted` — emitted when a transaction is successfully deleted
+
+Each event payload contains a unique `eventId` (for client-side deduplication), the mutation target `id`, the `transaction` entity (for creates and updates), and an ISO-8601 `timestamp`.
+
+### Authentication & Access Control
+
+* Socket handshakes are authenticated against the caller's session (using the `spendly_session` cookie or `handshake.auth.token`).
+* Anonymous or expired sessions are rejected at the handshake gate.
+* Each authenticated socket automatically joins `user:<userId>`. Sockets cannot join rooms belonging to other users, guaranteeing complete isolation of financial data.
+* Failed database operations (e.g. validation errors or 404s) never emit mutation events.
+
+### Scaling & Clustered Deployments (Redis Adapter)
+
+In default single-instance deployments, the built-in memory adapter manages socket connections.
+When scaling Spendly horizontally across multiple backend instances behind a load balancer:
+* A shared Socket.IO adapter such as `@socket.io/redis-adapter` (backed by Redis Pub/Sub or Redis Streams) or `@socket.io/mongo-adapter` (backed by MongoDB Change Streams) **MUST** be configured.
+* This ensures that mutations handled on one server instance are broadcast to sockets connected to any other server instance.
+* Sticky sessions (session affinity) should be enabled on the load balancer if HTTP long-polling transport fallback is allowed, or clients can be configured for pure WebSocket transport (`transports: ['websocket']`).
+
 ## Layout
 
 ```

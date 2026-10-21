@@ -7,6 +7,7 @@ import './index.css'
 import { App } from './App'
 import { AuthProvider } from './auth/AuthProvider'
 import { AppConfigProvider } from './config/app-config'
+import { RealtimeProvider } from './realtime/RealtimeContext'
 import { ToastProvider } from './components/ui/Toast'
 
 const container = document.getElementById('root')
@@ -20,7 +21,9 @@ createRoot(container).render(
     <AppConfigProvider>
       <ToastProvider>
         <AuthProvider>
-          <App />
+          <RealtimeProvider>
+            <App />
+          </RealtimeProvider>
         </AuthProvider>
       </ToastProvider>
     </AppConfigProvider>

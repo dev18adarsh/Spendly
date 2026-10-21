@@ -1,3 +1,5 @@
+import type { Server as HttpServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import type { Express } from 'express'
 import mongoose from 'mongoose'
 import { MongoMemoryServer } from 'mongodb-memory-server'
@@ -7,6 +9,12 @@ import type { Agent } from 'supertest'
 export interface TestHarness {
   app: Express
   stop: () => Promise<void>
+}
+
+export interface SocketTestHarness extends TestHarness {
+  httpServer: HttpServer
+  port: number
+  serverUrl: string
 }
 
 /**
@@ -35,6 +43,40 @@ export async function createTestHarness(): Promise<TestHarness> {
     stop: async () => {
       await mongoose.disconnect()
       await mongo.stop()
+    },
+  }
+}
+
+/**
+ * Boots the API along with the attached Socket.IO server on an ephemeral port.
+ */
+export async function createSocketTestHarness(): Promise<SocketTestHarness> {
+  const base = await createTestHarness()
+  const { createServer } = await import('node:http')
+  const { initSocketServer, closeSocketServer } = await import('../socket.js')
+
+  const httpServer = createServer(base.app)
+  initSocketServer(httpServer)
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(0, () => resolve())
+  })
+
+  const address = httpServer.address() as AddressInfo
+  const port = address.port
+  const serverUrl = `http://localhost:${port}`
+
+  return {
+    ...base,
+    httpServer,
+    port,
+    serverUrl,
+    stop: async () => {
+      await closeSocketServer()
+      await new Promise<void>((resolve) => {
+        httpServer.close(() => resolve())
+      })
+      await base.stop()
     },
   }
 }
