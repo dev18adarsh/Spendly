@@ -1,4 +1,4 @@
-import type { QueryFilter } from 'mongoose'
+import { Types, type QueryFilter } from 'mongoose'
 
 import type { CategorySlug } from '../constants/categories.js'
 import type { TransactionType } from '../constants/payment-methods.js'
@@ -34,8 +34,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function buildFilter(options: ListTransactionsOptions): QueryFilter<TransactionAttributes> {
-  const filter: QueryFilter<TransactionAttributes> = {}
+function buildFilter(userId: string, options: ListTransactionsOptions): QueryFilter<TransactionAttributes> {
+  const filter: QueryFilter<TransactionAttributes> = { userId: new Types.ObjectId(userId) }
 
   if (options.from || options.to) {
     filter.date = {}
@@ -62,9 +62,10 @@ function buildSort(sort: string): Record<string, 1 | -1> {
 
 /** Lists transactions with optional filters, sorted and paginated. */
 export async function listTransactions(
+  userId: string,
   options: ListTransactionsOptions,
 ): Promise<ListTransactionsResult> {
-  const filter = buildFilter(options)
+  const filter = buildFilter(userId, options)
   const skip = (options.page - 1) * options.limit
 
   const [rows, total] = await Promise.all([
@@ -88,8 +89,22 @@ export async function listTransactions(
   }
 }
 
-export async function getTransactionById(id: string): Promise<TransactionDto | null> {
-  const row = await TransactionModel.findById(id).lean().exec()
+/**
+ * Fetches one transaction.
+ *
+ * The owner is part of the query, so another account's transaction is simply
+ * not found — the id alone never grants access.
+ */
+export async function getTransactionById(
+  userId: string,
+  id: string,
+): Promise<TransactionDto | null> {
+  const row = await TransactionModel.findOne({
+    _id: id,
+    userId: new Types.ObjectId(userId),
+  })
+    .lean()
+    .exec()
   if (!row) return null
 
   const meta = await resolveCategories([row.category])
@@ -98,9 +113,13 @@ export async function getTransactionById(id: string): Promise<TransactionDto | n
   return toTransactionDto(row, categoryMeta)
 }
 
-export async function createTransaction(input: CreateTransactionInput): Promise<TransactionDto> {
+export async function createTransaction(
+  userId: string,
+  input: CreateTransactionInput,
+): Promise<TransactionDto> {
   const created = await TransactionModel.create({
     ...input,
+    userId: new Types.ObjectId(userId),
     date: input.date ?? new Date(),
     status: input.status ?? 'cleared',
   })
@@ -112,11 +131,12 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 }
 
 export async function updateTransaction(
+  userId: string,
   id: string,
   input: UpdateTransactionInput,
 ): Promise<TransactionDto | null> {
-  const updated = await TransactionModel.findByIdAndUpdate(
-    id,
+  const updated = await TransactionModel.findOneAndUpdate(
+    { _id: id, userId: new Types.ObjectId(userId) },
     { $set: input },
     { returnDocument: 'after', runValidators: true },
   ).lean()
@@ -129,14 +149,17 @@ export async function updateTransaction(
   return toTransactionDto(updated, categoryMeta)
 }
 
-export async function deleteTransaction(id: string): Promise<boolean> {
-  const result = await TransactionModel.findByIdAndDelete(id).exec()
+export async function deleteTransaction(userId: string, id: string): Promise<boolean> {
+  const result = await TransactionModel.findOneAndDelete({
+    _id: id,
+    userId: new Types.ObjectId(userId),
+  }).exec()
   return result !== null
 }
 
-/** Throws a 404 when the transaction does not exist. */
-export async function requireTransaction(id: string): Promise<TransactionDto> {
-  const transaction = await getTransactionById(id)
+/** Throws a 404 when the transaction does not exist — or is not yours. */
+export async function requireTransaction(userId: string, id: string): Promise<TransactionDto> {
+  const transaction = await getTransactionById(userId, id)
   if (!transaction) {
     throw ApiError.notFound(`No transaction found with id "${id}".`)
   }

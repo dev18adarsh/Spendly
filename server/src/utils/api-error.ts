@@ -35,12 +35,20 @@ export class ApiError extends Error {
     return new ApiError(401, 'UNAUTHORIZED', message)
   }
 
+  static forbidden(message = 'This request was rejected.', code = 'FORBIDDEN'): ApiError {
+    return new ApiError(403, code, message)
+  }
+
   static notFound(message = 'Resource not found.'): ApiError {
     return new ApiError(404, 'NOT_FOUND', message)
   }
 
   static conflict(message: string, details?: unknown): ApiError {
     return new ApiError(409, 'CONFLICT', message, details)
+  }
+
+  static tooManyRequests(message: string, details?: unknown): ApiError {
+    return new ApiError(429, 'RATE_LIMITED', message, details)
   }
 
   static databaseUnavailable(message: string, details?: unknown): ApiError {

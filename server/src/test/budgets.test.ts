@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, describe, it } from 'node:test'
 
-import request from 'supertest'
-
-import { createTestHarness, resetCollections, transactionPayload, type TestHarness } from './harness.js'
+import {
+  createTestHarness,
+  registerUser,
+  resetCollections,
+  transactionPayload,
+  type TestClient,
+  type TestHarness,
+} from './harness.js'
 
 let harness: TestHarness
+let client: TestClient
 
 const now = new Date()
 const currentMonth = now.getUTCMonth() + 1
@@ -21,11 +27,12 @@ after(async () => {
 
 beforeEach(async () => {
   await resetCollections()
+  client = await registerUser(harness.app)
 })
 
 describe('GET /api/budgets', () => {
   it('returns an empty list when no budget is set', async () => {
-    const response = await request(harness.app).get('/api/budgets')
+    const response = await client.get('/api/budgets')
 
     assert.equal(response.status, 200)
     assert.equal(response.body.success, true)
@@ -33,11 +40,11 @@ describe('GET /api/budgets', () => {
   })
 
   it('returns the budgets for the requested month', async () => {
-    await request(harness.app)
+    await client
       .post('/api/budgets')
       .send({ category: 'food', limit: 500, month: currentMonth, year: currentYear })
 
-    const response = await request(harness.app).get(
+    const response = await client.get(
       `/api/budgets?month=${currentMonth}&year=${currentYear}`,
     )
 
@@ -52,12 +59,12 @@ describe('GET /api/budgets', () => {
   })
 
   it('does not return budgets from another month', async () => {
-    await request(harness.app)
+    await client
       .post('/api/budgets')
       .send({ category: 'food', limit: 500, month: currentMonth, year: currentYear })
 
     const otherMonth = currentMonth === 1 ? 2 : 1
-    const response = await request(harness.app).get(
+    const response = await client.get(
       `/api/budgets?month=${otherMonth}&year=${currentYear}`,
     )
 
@@ -66,7 +73,7 @@ describe('GET /api/budgets', () => {
   })
 
   it('rejects an invalid month', async () => {
-    const response = await request(harness.app).get('/api/budgets?month=13')
+    const response = await client.get('/api/budgets?month=13')
 
     assert.equal(response.status, 422)
   })
@@ -74,7 +81,7 @@ describe('GET /api/budgets', () => {
 
 describe('POST /api/budgets', () => {
   it('creates a budget', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/budgets')
       .send({ category: 'transport', limit: 250.75, month: currentMonth, year: currentYear })
 
@@ -87,7 +94,7 @@ describe('POST /api/budgets', () => {
   })
 
   it('reports the amount already spent in that month', async () => {
-    await request(harness.app)
+    await client
       .post('/api/transactions')
       .send(
         transactionPayload({
@@ -98,7 +105,7 @@ describe('POST /api/budgets', () => {
           date: new Date(Date.UTC(currentYear, currentMonth - 1, 5)).toISOString(),
         }),
       )
-    await request(harness.app)
+    await client
       .post('/api/transactions')
       .send(
         transactionPayload({
@@ -110,11 +117,11 @@ describe('POST /api/budgets', () => {
         }),
       )
 
-    await request(harness.app)
+    await client
       .post('/api/budgets')
       .send({ category: 'food', limit: 500, month: currentMonth, year: currentYear })
 
-    const response = await request(harness.app).get(
+    const response = await client.get(
       `/api/budgets?month=${currentMonth}&year=${currentYear}`,
     )
 
@@ -123,7 +130,7 @@ describe('POST /api/budgets', () => {
   })
 
   it('ignores income when calculating spend', async () => {
-    await request(harness.app)
+    await client
       .post('/api/transactions')
       .send(
         transactionPayload({
@@ -135,11 +142,11 @@ describe('POST /api/budgets', () => {
         }),
       )
 
-    await request(harness.app)
+    await client
       .post('/api/budgets')
       .send({ category: 'income', limit: 5000, month: currentMonth, year: currentYear })
 
-    const response = await request(harness.app).get(
+    const response = await client.get(
       `/api/budgets?month=${currentMonth}&year=${currentYear}`,
     )
 
@@ -147,7 +154,7 @@ describe('POST /api/budgets', () => {
   })
 
   it('rejects an unknown category', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/budgets')
       .send({ category: 'nope', limit: 100, month: currentMonth, year: currentYear })
 
@@ -155,7 +162,7 @@ describe('POST /api/budgets', () => {
   })
 
   it('rejects a negative limit', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/budgets')
       .send({ category: 'food', limit: -1, month: currentMonth, year: currentYear })
 
@@ -165,13 +172,13 @@ describe('POST /api/budgets', () => {
 
 describe('PUT /api/budgets', () => {
   it('updates an existing budget instead of duplicating it', async () => {
-    const first = await request(harness.app)
+    const first = await client
       .put('/api/budgets')
       .send({ category: 'food', limit: 500, month: currentMonth, year: currentYear })
 
     assert.equal(first.status, 200)
 
-    const second = await request(harness.app)
+    const second = await client
       .put('/api/budgets')
       .send({ category: 'food', limit: 650, month: currentMonth, year: currentYear })
 
@@ -179,7 +186,7 @@ describe('PUT /api/budgets', () => {
     assert.equal(second.body.data.id, first.body.data.id)
     assert.equal(second.body.data.limit, 650)
 
-    const list = await request(harness.app).get(
+    const list = await client.get(
       `/api/budgets?month=${currentMonth}&year=${currentYear}`,
     )
     assert.equal(list.body.data.length, 1)
@@ -188,11 +195,11 @@ describe('PUT /api/budgets', () => {
 
 describe('PATCH /api/budgets/:id', () => {
   it('updates the limit of a budget', async () => {
-    const created = await request(harness.app)
+    const created = await client
       .post('/api/budgets')
       .send({ category: 'shopping', limit: 300, month: currentMonth, year: currentYear })
 
-    const response = await request(harness.app)
+    const response = await client
       .patch(`/api/budgets/${created.body.data.id}`)
       .send({ limit: 425 })
 
@@ -202,7 +209,7 @@ describe('PATCH /api/budgets/:id', () => {
   })
 
   it('returns 404 for an unknown id', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .patch('/api/budgets/64b7f1c2a1b2c3d4e5f6a7b8')
       .send({ limit: 100 })
 
@@ -212,14 +219,14 @@ describe('PATCH /api/budgets/:id', () => {
 
 describe('DELETE /api/budgets/:id', () => {
   it('removes the budget', async () => {
-    const created = await request(harness.app)
+    const created = await client
       .post('/api/budgets')
       .send({ category: 'health', limit: 120, month: currentMonth, year: currentYear })
 
-    const deleted = await request(harness.app).delete(`/api/budgets/${created.body.data.id}`)
+    const deleted = await client.delete(`/api/budgets/${created.body.data.id}`)
     assert.equal(deleted.status, 204)
 
-    const list = await request(harness.app).get(
+    const list = await client.get(
       `/api/budgets?month=${currentMonth}&year=${currentYear}`,
     )
     assert.equal(list.body.data.length, 0)

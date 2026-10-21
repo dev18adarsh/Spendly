@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, describe, it } from 'node:test'
 
-import request from 'supertest'
-
-import { createTestHarness, resetCollections, transactionPayload, type TestHarness } from './harness.js'
+import {
+  createTestHarness,
+  registerUser,
+  resetCollections,
+  transactionPayload,
+  type TestClient,
+  type TestHarness,
+} from './harness.js'
 
 let harness: TestHarness
+let client: TestClient
 
 before(async () => {
   harness = await createTestHarness()
@@ -17,11 +23,12 @@ after(async () => {
 
 beforeEach(async () => {
   await resetCollections()
+  client = await registerUser(harness.app)
 })
 
 describe('POST /api/transactions', () => {
   it('creates a transaction and returns it in the success envelope', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/transactions')
       .send(
         transactionPayload({
@@ -50,7 +57,7 @@ describe('POST /api/transactions', () => {
   })
 
   it('stores the document in MongoDB', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/transactions')
       .send(transactionPayload())
 
@@ -63,7 +70,7 @@ describe('POST /api/transactions', () => {
   })
 
   it('rejects a body without an amount', async () => {
-    const response = await request(harness.app).post('/api/transactions').send({
+    const response = await client.post('/api/transactions').send({
       type: 'expense',
       category: 'food',
       description: 'Missing amount',
@@ -76,7 +83,7 @@ describe('POST /api/transactions', () => {
   })
 
   it('rejects a negative amount', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/transactions')
       .send(transactionPayload({ amount: -5 }))
 
@@ -85,7 +92,7 @@ describe('POST /api/transactions', () => {
   })
 
   it('rejects an unknown category', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/transactions')
       .send(transactionPayload({ category: 'cryptocurrency' }))
 
@@ -94,7 +101,7 @@ describe('POST /api/transactions', () => {
   })
 
   it('rejects an unknown type', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/transactions')
       .send(transactionPayload({ type: 'transfer' }))
 
@@ -102,7 +109,7 @@ describe('POST /api/transactions', () => {
   })
 
   it('rejects unknown fields', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .post('/api/transactions')
       .send({ ...transactionPayload(), sneaky: true })
 
@@ -112,7 +119,7 @@ describe('POST /api/transactions', () => {
 
 describe('GET /api/transactions', () => {
   beforeEach(async () => {
-    await request(harness.app)
+    await client
       .post('/api/transactions')
       .send(
         transactionPayload({
@@ -123,7 +130,7 @@ describe('GET /api/transactions', () => {
           date: '2026-03-10T12:00:00.000Z',
         }),
       )
-    await request(harness.app)
+    await client
       .post('/api/transactions')
       .send(
         transactionPayload({
@@ -134,7 +141,7 @@ describe('GET /api/transactions', () => {
           date: '2026-03-12T12:00:00.000Z',
         }),
       )
-    await request(harness.app)
+    await client
       .post('/api/transactions')
       .send(
         transactionPayload({
@@ -148,7 +155,7 @@ describe('GET /api/transactions', () => {
   })
 
   it('returns every transaction with pagination metadata', async () => {
-    const response = await request(harness.app).get('/api/transactions')
+    const response = await client.get('/api/transactions')
 
     assert.equal(response.status, 200)
     assert.equal(response.body.success, true)
@@ -160,7 +167,7 @@ describe('GET /api/transactions', () => {
   })
 
   it('filters by type', async () => {
-    const response = await request(harness.app).get('/api/transactions?type=income')
+    const response = await client.get('/api/transactions?type=income')
 
     assert.equal(response.status, 200)
     assert.equal(response.body.data.length, 1)
@@ -169,7 +176,7 @@ describe('GET /api/transactions', () => {
   })
 
   it('filters by category', async () => {
-    const response = await request(harness.app).get('/api/transactions?category=transport')
+    const response = await client.get('/api/transactions?category=transport')
 
     assert.equal(response.status, 200)
     assert.equal(response.body.data.length, 1)
@@ -177,7 +184,7 @@ describe('GET /api/transactions', () => {
   })
 
   it('filters by date range', async () => {
-    const response = await request(harness.app).get(
+    const response = await client.get(
       '/api/transactions?from=2026-04-01T00:00:00.000Z&to=2026-04-30T23:59:59.999Z',
     )
 
@@ -187,7 +194,7 @@ describe('GET /api/transactions', () => {
   })
 
   it('filters by search text', async () => {
-    const response = await request(harness.app).get('/api/transactions?search=coffee')
+    const response = await client.get('/api/transactions?search=coffee')
 
     assert.equal(response.status, 200)
     assert.equal(response.body.data.length, 1)
@@ -195,8 +202,8 @@ describe('GET /api/transactions', () => {
   })
 
   it('paginates results', async () => {
-    const first = await request(harness.app).get('/api/transactions?limit=2&page=1')
-    const second = await request(harness.app).get('/api/transactions?limit=2&page=2')
+    const first = await client.get('/api/transactions?limit=2&page=1')
+    const second = await client.get('/api/transactions?limit=2&page=2')
 
     assert.equal(first.body.data.length, 2)
     assert.equal(first.body.meta.pagination.hasNextPage, true)
@@ -209,7 +216,7 @@ describe('GET /api/transactions', () => {
   })
 
   it('sorts by the requested field', async () => {
-    const response = await request(harness.app).get('/api/transactions?sort=amount&limit=10')
+    const response = await client.get('/api/transactions?sort=amount&limit=10')
 
     assert.equal(response.status, 200)
     const amounts = response.body.data.map((item: { amount: number }) => item.amount)
@@ -217,14 +224,14 @@ describe('GET /api/transactions', () => {
   })
 
   it('rejects an invalid filter value', async () => {
-    const response = await request(harness.app).get('/api/transactions?type=bogus')
+    const response = await client.get('/api/transactions?type=bogus')
 
     assert.equal(response.status, 422)
     assert.equal(response.body.error.code, 'VALIDATION_ERROR')
   })
 
   it('rejects a date range that ends before it starts', async () => {
-    const response = await request(harness.app).get(
+    const response = await client.get(
       '/api/transactions?from=2026-05-01T00:00:00.000Z&to=2026-04-01T00:00:00.000Z',
     )
 
@@ -234,18 +241,18 @@ describe('GET /api/transactions', () => {
 
 describe('GET /api/transactions/:id', () => {
   it('returns a single transaction', async () => {
-    const created = await request(harness.app)
+    const created = await client
       .post('/api/transactions')
       .send(transactionPayload())
 
-    const response = await request(harness.app).get(`/api/transactions/${created.body.data.id}`)
+    const response = await client.get(`/api/transactions/${created.body.data.id}`)
 
     assert.equal(response.status, 200)
     assert.equal(response.body.data.id, created.body.data.id)
   })
 
   it('returns 404 for an unknown id', async () => {
-    const response = await request(harness.app).get('/api/transactions/64b7f1c2a1b2c3d4e5f6a7b8')
+    const response = await client.get('/api/transactions/64b7f1c2a1b2c3d4e5f6a7b8')
 
     assert.equal(response.status, 404)
     assert.equal(response.body.success, false)
@@ -255,11 +262,11 @@ describe('GET /api/transactions/:id', () => {
 
 describe('PATCH /api/transactions/:id', () => {
   it('updates the given fields only', async () => {
-    const created = await request(harness.app)
+    const created = await client
       .post('/api/transactions')
       .send(transactionPayload({ amount: 30, merchant: 'Corner Store' }))
 
-    const response = await request(harness.app)
+    const response = await client
       .patch(`/api/transactions/${created.body.data.id}`)
       .send({ amount: 55.25, description: 'Updated description' })
 
@@ -271,17 +278,17 @@ describe('PATCH /api/transactions/:id', () => {
   })
 
   it('rejects an empty body', async () => {
-    const created = await request(harness.app)
+    const created = await client
       .post('/api/transactions')
       .send(transactionPayload())
 
-    const response = await request(harness.app).patch(`/api/transactions/${created.body.data.id}`).send({})
+    const response = await client.patch(`/api/transactions/${created.body.data.id}`).send({})
 
     assert.equal(response.status, 422)
   })
 
   it('returns 404 for an unknown id', async () => {
-    const response = await request(harness.app)
+    const response = await client
       .patch('/api/transactions/64b7f1c2a1b2c3d4e5f6a7b8')
       .send({ amount: 10 })
 
@@ -291,22 +298,22 @@ describe('PATCH /api/transactions/:id', () => {
 
 describe('DELETE /api/transactions/:id', () => {
   it('removes the transaction', async () => {
-    const created = await request(harness.app)
+    const created = await client
       .post('/api/transactions')
       .send(transactionPayload())
 
-    const deleted = await request(harness.app).delete(`/api/transactions/${created.body.data.id}`)
+    const deleted = await client.delete(`/api/transactions/${created.body.data.id}`)
     assert.equal(deleted.status, 204)
 
-    const fetched = await request(harness.app).get(`/api/transactions/${created.body.data.id}`)
+    const fetched = await client.get(`/api/transactions/${created.body.data.id}`)
     assert.equal(fetched.status, 404)
 
-    const list = await request(harness.app).get('/api/transactions')
+    const list = await client.get('/api/transactions')
     assert.equal(list.body.meta.pagination.total, 0)
   })
 
   it('returns 404 for an unknown id', async () => {
-    const response = await request(harness.app).delete('/api/transactions/64b7f1c2a1b2c3d4e5f6a7b8')
+    const response = await client.delete('/api/transactions/64b7f1c2a1b2c3d4e5f6a7b8')
 
     assert.equal(response.status, 404)
   })

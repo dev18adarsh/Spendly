@@ -1,8 +1,10 @@
+import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import express, { type Express } from 'express'
 import helmet from 'helmet'
 
 import { env } from './config/env.js'
+import { ensureCsrfCookie } from './middleware/csrf.js'
 import { errorHandler } from './middleware/error-handler.js'
 import { notFoundHandler } from './middleware/not-found.js'
 import { apiRouter } from './routes/index.js'
@@ -22,11 +24,21 @@ export function createApp(): Express {
   app.use(
     cors({
       // Only the configured frontend origins may call the API from a browser.
+      // The list is explicit — `*` is never used, because credentialed
+      // requests are not allowed to use a wildcard origin.
       origin: env.corsOrigins,
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Accept', 'X-CSRF-Token'],
     }),
   )
+
+  // The session cookie is read by the authentication middleware.
+  app.use(cookieParser())
+
+  // Every visitor carries a CSRF token, so signing in never deadlocks on
+  // "the client has no token yet".
+  app.use(ensureCsrfCookie)
 
   app.use(express.json({ limit: '1mb' }))
   app.use(express.urlencoded({ extended: true }))
@@ -36,11 +48,12 @@ export function createApp(): Express {
       success: true,
       data: {
         name: 'Spendly API',
-        version: '0.2.0',
+        version: '0.3.0',
         environment: env.nodeEnv,
         endpoints: {
           health: '/api/health',
           readiness: '/api/health/ready',
+          auth: '/api/auth',
           transactions: '/api/transactions',
           budgets: '/api/budgets',
           categories: '/api/categories',

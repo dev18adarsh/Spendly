@@ -52,3 +52,47 @@ export interface SpendlyApi {
 }
 
 export type { Budget, CashflowPoint, Category, CategorySpend, SummaryMetrics, Transaction }
+
+/* ------------------------------------------------------------------ */
+/* Authentication                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The signed-in account.
+ *
+ * There is no token in here — the session lives in an HTTP-only cookie the
+ * browser attaches on its own, so the app never handles a credential.
+ */
+export interface AuthUser {
+  id: string
+  email: string
+  name: string
+  /** ISO-8601 timestamp of when the account was created. */
+  createdAt: string
+}
+
+export interface RegisterInput {
+  name: string
+  email: string
+  password: string
+}
+
+export interface LoginInput {
+  email: string
+  password: string
+}
+
+/**
+ * The authentication endpoints.
+ *
+ * Every call is cookie-based: the browser sends the session cookie and the
+ * client repeats the CSRF token in a header. Nothing is ever written to
+ * `localStorage` or `sessionStorage`.
+ */
+export interface AuthApi {
+  register(input: RegisterInput): Promise<AuthUser>
+  login(input: LoginInput): Promise<AuthUser>
+  logout(): Promise<void>
+  /** The current account, or `null` when nobody is signed in. */
+  me(signal?: AbortSignal): Promise<AuthUser | null>
+}

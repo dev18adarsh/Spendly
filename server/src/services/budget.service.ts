@@ -1,3 +1,5 @@
+import { Types } from 'mongoose'
+
 import { BudgetModel } from '../models/budget.model.js'
 import { TransactionModel } from '../models/transaction.model.js'
 import type { BudgetDto } from '../types/api.js'
@@ -26,16 +28,24 @@ export function monthRangeUtc(year: number, month: number): { start: Date; end: 
 
 /**
  * Amount already spent per category for a calendar month.
- * Aggregated from the transactions collection — never from sample data.
+ * Aggregated from the transactions collection — never from sample data, and
+ * always limited to the account that is asking.
  */
 export async function spentByCategory(
+  userId: string,
   year: number,
   month: number,
 ): Promise<Map<string, number>> {
   const { start, end } = monthRangeUtc(year, month)
 
   const rows = await TransactionModel.aggregate<{ _id: string; spent: number }>([
-    { $match: { type: 'expense', date: { $gte: start, $lt: end } } },
+    {
+      $match: {
+        userId: new Types.ObjectId(userId),
+        type: 'expense',
+        date: { $gte: start, $lt: end },
+      },
+    },
     { $group: { _id: '$category', spent: { $sum: '$amount' } } },
   ]).exec()
 
@@ -46,14 +56,17 @@ export async function spentByCategory(
   return totals
 }
 
-export async function listBudgets(options: ListBudgetsOptions): Promise<BudgetDto[]> {
+export async function listBudgets(userId: string, options: ListBudgetsOptions): Promise<BudgetDto[]> {
   const now = new Date()
   const month = options.month ?? now.getUTCMonth() + 1
   const year = options.year ?? now.getUTCFullYear()
 
   const [rows, spent] = await Promise.all([
-    BudgetModel.find({ month, year }).sort({ category: 1 }).lean().exec(),
-    spentByCategory(year, month),
+    BudgetModel.find({ userId: new Types.ObjectId(userId), month, year })
+      .sort({ category: 1 })
+      .lean()
+      .exec(),
+    spentByCategory(userId, year, month),
   ])
 
   const meta = await resolveCategories(rows.map((row) => row.category))
@@ -73,12 +86,19 @@ export async function listBudgets(options: ListBudgetsOptions): Promise<BudgetDt
   })
 }
 
-export async function getBudgetById(id: string): Promise<BudgetDto | null> {
-  const row = await BudgetModel.findById(id).lean().exec()
+/**
+ * Fetches one budget.
+ *
+ * The owner is part of the query, so another account's budget is not found.
+ */
+export async function getBudgetById(userId: string, id: string): Promise<BudgetDto | null> {
+  const row = await BudgetModel.findOne({ _id: id, userId: new Types.ObjectId(userId) })
+    .lean()
+    .exec()
   if (!row) return null
 
   const [spent, meta] = await Promise.all([
-    spentByCategory(row.year, row.month),
+    spentByCategory(userId, row.year, row.month),
     resolveCategories([row.category]),
   ])
 
@@ -89,9 +109,14 @@ export async function getBudgetById(id: string): Promise<BudgetDto | null> {
 }
 
 /** Creates the budget or updates its limit if it already exists. */
-export async function upsertBudget(input: UpsertBudgetInput): Promise<BudgetDto> {
+export async function upsertBudget(userId: string, input: UpsertBudgetInput): Promise<BudgetDto> {
   const row = await BudgetModel.findOneAndUpdate(
-    { category: input.category, month: input.month, year: input.year },
+    {
+      userId: new Types.ObjectId(userId),
+      category: input.category,
+      month: input.month,
+      year: input.year,
+    },
     { $set: { limit: input.limit } },
     {
       returnDocument: 'after',
@@ -106,7 +131,7 @@ export async function upsertBudget(input: UpsertBudgetInput): Promise<BudgetDto>
   }
 
   const [spent, meta] = await Promise.all([
-    spentByCategory(row.year, row.month),
+    spentByCategory(userId, row.year, row.month),
     resolveCategories([row.category]),
   ])
 
@@ -119,11 +144,12 @@ export async function upsertBudget(input: UpsertBudgetInput): Promise<BudgetDto>
 }
 
 export async function updateBudgetById(
+  userId: string,
   id: string,
   input: UpdateBudgetInput,
 ): Promise<BudgetDto | null> {
-  const row = await BudgetModel.findByIdAndUpdate(
-    id,
+  const row = await BudgetModel.findOneAndUpdate(
+    { _id: id, userId: new Types.ObjectId(userId) },
     { $set: { limit: input.limit } },
     { returnDocument: 'after', runValidators: true },
   ).lean()
@@ -131,7 +157,7 @@ export async function updateBudgetById(
   if (!row) return null
 
   const [spent, meta] = await Promise.all([
-    spentByCategory(row.year, row.month),
+    spentByCategory(userId, row.year, row.month),
     resolveCategories([row.category]),
   ])
 
@@ -141,7 +167,10 @@ export async function updateBudgetById(
   return toBudgetDto(row, categoryMeta, spent.get(row.category) ?? 0)
 }
 
-export async function deleteBudget(id: string): Promise<boolean> {
-  const result = await BudgetModel.findByIdAndDelete(id).exec()
+export async function deleteBudget(userId: string, id: string): Promise<boolean> {
+  const result = await BudgetModel.findOneAndDelete({
+    _id: id,
+    userId: new Types.ObjectId(userId),
+  }).exec()
   return result !== null
 }

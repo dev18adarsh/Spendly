@@ -1,3 +1,5 @@
+import { Types } from 'mongoose'
+
 import { TransactionModel } from '../models/transaction.model.js'
 import type {
   CashflowPointDto,
@@ -78,8 +80,12 @@ interface Totals {
 }
 
 /** Income and expense totals for a window (both bounds optional). */
-async function totalsBetween(from?: Date, to?: Date): Promise<Totals> {
-  const match: Record<string, unknown> = {}
+async function totalsBetween(
+  userId: string,
+  from?: Date,
+  to?: Date,
+): Promise<Totals> {
+  const match: Record<string, unknown> = { userId: new Types.ObjectId(userId) }
   if (from || to) {
     match.date = {}
     if (from) (match.date as Record<string, Date>).$gte = from
@@ -114,16 +120,20 @@ function metricChange(value: number, isPositive: boolean): MetricChangeDto {
  * `totalBalance` is the all-time balance (every income minus every expense),
  * while the other figures cover the selected window only.
  */
-export async function getSummary(key: RangeKey, now: Date = new Date()): Promise<SummaryDto> {
+export async function getSummary(
+  userId: string,
+  key: RangeKey,
+  now: Date = new Date(),
+): Promise<SummaryDto> {
   const range = resolveRange(key, now)
   const previousFrom = new Date(range.from.getTime() - range.durationMs)
   const previousTo = range.from
 
   const [current, previous, allTime, beforeWindow] = await Promise.all([
-    totalsBetween(range.from, range.to),
-    totalsBetween(previousFrom, previousTo),
-    totalsBetween(),
-    totalsBetween(undefined, previousTo),
+    totalsBetween(userId, range.from, range.to),
+    totalsBetween(userId, previousFrom, previousTo),
+    totalsBetween(userId),
+    totalsBetween(userId, undefined, previousTo),
   ])
 
   const totalBalance = allTime.income - allTime.expenses
@@ -222,7 +232,11 @@ function bucketLabel(date: Date, unit: BucketUnit): string {
  *
  * Buckets are daily (7D/30D), weekly (90D) or monthly (12M).
  */
-export async function getCashflow(key: RangeKey, now: Date = new Date()): Promise<CashflowPointDto[]> {
+export async function getCashflow(
+  userId: string,
+  key: RangeKey,
+  now: Date = new Date(),
+): Promise<CashflowPointDto[]> {
   const range = resolveRange(key, now)
   const unit = bucketUnitFor(key)
 
@@ -230,7 +244,12 @@ export async function getCashflow(key: RangeKey, now: Date = new Date()): Promis
     _id: { bucket: Date; type: string }
     total: number
   }>([
-    { $match: { date: { $gte: range.from, $lte: range.to } } },
+    {
+      $match: {
+        userId: new Types.ObjectId(userId),
+        date: { $gte: range.from, $lte: range.to },
+      },
+    },
     {
       $group: {
         _id: {
@@ -264,13 +283,20 @@ export async function getCashflow(key: RangeKey, now: Date = new Date()): Promis
 
 /** Spend per category within a reporting window. */
 export async function getCategoryBreakdown(
+  userId: string,
   key: RangeKey,
   now: Date = new Date(),
 ): Promise<CategorySpendDto[]> {
   const range = resolveRange(key, now)
 
   const rows = await TransactionModel.aggregate<{ _id: string; total: number }>([
-    { $match: { type: 'expense', date: { $gte: range.from, $lte: range.to } } },
+    {
+      $match: {
+        userId: new Types.ObjectId(userId),
+        type: 'expense',
+        date: { $gte: range.from, $lte: range.to },
+      },
+    },
     { $group: { _id: '$category', total: { $sum: '$amount' } } },
   ]).exec()
 
@@ -297,6 +323,7 @@ export async function getCategoryBreakdown(
 
 /** Merchants ranked by spend within a reporting window. */
 export async function getTopMerchants(
+  userId: string,
   key: RangeKey,
   limit = 6,
   now: Date = new Date(),
@@ -310,7 +337,13 @@ export async function getTopMerchants(
     count: number
     category: string
   }>([
-    { $match: { type: 'expense', date: { $gte: range.from, $lte: range.to } } },
+    {
+      $match: {
+        userId: new Types.ObjectId(userId),
+        type: 'expense',
+        date: { $gte: range.from, $lte: range.to },
+      },
+    },
     {
       $group: {
         _id: { $ifNull: ['$merchant', '$description'] },

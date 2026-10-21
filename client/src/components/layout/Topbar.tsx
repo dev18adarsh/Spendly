@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Bell, Info, Menu, Plus, Search } from 'lucide-react'
 
+import { useAuth } from '@/auth/AuthContext'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -9,6 +10,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Select } from '@/components/ui/Select'
 import { useLockBodyScroll } from '@/hooks/useLockBodyScroll'
 import { cn } from '@/lib/cn'
+import { initialsOf } from '@/lib/user'
 
 import { navigation } from './navigation'
 
@@ -17,6 +19,7 @@ export function Topbar() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(false)
   const location = useLocation()
+  const { user } = useAuth()
 
   useLockBodyScroll(drawerOpen)
 
@@ -108,7 +111,7 @@ export function Topbar() {
               aria-label="Open profile settings"
               className="ml-1 hidden size-8 items-center justify-center rounded-full border border-line bg-surface-3 text-[11px] font-semibold text-ink-muted transition-colors hover:border-line-strong hover:text-ink sm:flex"
             >
-              AD
+              {user ? initialsOf(user.name) : 'SP'}
             </Link>
           </div>
         </div>

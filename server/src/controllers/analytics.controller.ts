@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express'
 import { z } from 'zod'
 
+import { currentUser } from '../middleware/authenticate.js'
 import {
   getCashflow as getCashflowService,
   getCategoryBreakdown as getCategoryBreakdownService,
@@ -26,32 +27,36 @@ type MerchantsQuery = z.infer<typeof merchantsQuerySchema>
 
 /** `GET /api/analytics/summary` — headline metrics for a reporting window. */
 export const getSummary = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const { range } = validated<AnalyticsQuery>(request, 'query')
-  const summary = await getSummaryService(range)
+  const summary = await getSummaryService(userId, range)
 
   sendSuccess(response, summary)
 })
 
 /** `GET /api/analytics/cashflow` — income/expense series for a window. */
 export const getCashflow = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const { range } = validated<AnalyticsQuery>(request, 'query')
-  const series = await getCashflowService(range)
+  const series = await getCashflowService(userId, range)
 
   sendSuccess(response, series)
 })
 
 /** `GET /api/analytics/categories` — spend per category for a window. */
 export const getCategoryBreakdown = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const { range } = validated<AnalyticsQuery>(request, 'query')
-  const breakdown = await getCategoryBreakdownService(range)
+  const breakdown = await getCategoryBreakdownService(userId, range)
 
   sendSuccess(response, breakdown)
 })
 
 /** `GET /api/analytics/merchants` — top merchants by spend for a window. */
 export const getTopMerchants = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const { range, limit } = validated<MerchantsQuery>(request, 'query')
-  const merchants = await getTopMerchantsService(range, limit)
+  const merchants = await getTopMerchantsService(userId, range, limit)
 
   sendSuccess(response, merchants)
 })

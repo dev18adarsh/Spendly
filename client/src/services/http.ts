@@ -1,8 +1,12 @@
 import type {
+  AuthApi,
+  AuthUser,
   Budget,
   CashflowPoint,
   Category,
   CategorySpend,
+  LoginInput,
+  RegisterInput,
   SpendlyApi,
   SummaryMetrics,
   Transaction,
@@ -12,28 +16,48 @@ import type { DateRangeKey } from '@/services/types'
 import type { MerchantSpend } from '@/data/mock/analytics'
 import type { PaymentMethod } from '@/types'
 
+import { CSRF_HEADER, currentCsrfToken, forgetCsrfToken, rememberCsrfToken } from './csrf'
+
 /**
  * Real HTTP client for the Spendly API.
  *
  * It speaks the API's envelope (`{ success, data, meta }`) and maps the
  * server's DTOs onto the shapes the UI renders. Set `VITE_DATA_SOURCE=api`
  * to read from the Express server instead of the bundled sample data.
+ *
+ * Authentication is cookie-based: every request is sent with
+ * `credentials: 'include'` so the browser attaches the HTTP-only session
+ * cookie, and every write repeats the CSRF token in a header. No token is
+ * ever stored in `localStorage`.
  */
 
 export class ApiError extends Error {
   readonly status: number
+  /** The stable error code the API returns, e.g. `INVALID_CREDENTIALS`. */
+  readonly code: string
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code = 'UNKNOWN') {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
+/**
+ * Fired when the API rejects a request because the session is gone.
+ *
+ * The auth provider listens for it and signs the user out, which sends the
+ * app back to the sign-in screen instead of showing a cryptic error.
+ */
+export const SESSION_EXPIRED_EVENT = 'spendly:session-expired'
+
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
+  /** Set to `false` for the "who am I?" call, where a 401 is expected. */
+  notifyOnUnauthorized?: boolean
 }
 
 interface ApiEnvelope<T> {
@@ -57,7 +81,16 @@ interface ApiErrorEnvelope {
     status: number
     code: string
     message: string
+    details?: unknown
   }
+}
+
+/** The server's view of an account. */
+interface ServerUser {
+  id: string
+  email: string
+  name: string
+  createdAt: string
 }
 
 /* ------------------------------------------------------------------ */
@@ -197,47 +230,121 @@ function toQueryString(query: TransactionQuery = {}): string {
 /* Transport                                                           */
 /* ------------------------------------------------------------------ */
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, signal } = options
+/** Methods that change state and therefore need a CSRF token. */
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
-  let response: Response
-  try {
-    response = await fetch(path, {
-      method,
-      signal,
-      headers: body
-        ? { 'Content-Type': 'application/json', Accept: 'application/json' }
-        : { Accept: 'application/json' },
-      body: body ? JSON.stringify(body) : undefined,
+/**
+ * A request bound to one API root.
+ *
+ * Every request carries the session cookie (`credentials: 'include'`) and
+ * every write carries the CSRF token.
+ */
+function createRequester(baseUrl: string) {
+  const root = baseUrl.replace(/\/$/, '')
+
+  /** Fetches a CSRF token for the rare case where the cookie is not readable. */
+  async function fetchCsrfToken(): Promise<string> {
+    const response = await fetch(`${root}/auth/csrf`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
     })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new ApiError('Network request failed. Please try again.', 0)
+
+    if (!response.ok) return ''
+
+    const payload = (await response.json()) as ApiEnvelope<{ csrfToken: string }>
+    const token = payload?.data?.csrfToken ?? ''
+    rememberCsrfToken(token)
+    return token
   }
 
-  if (!response.ok) {
-    throw new ApiError(await readErrorMessage(response), response.status)
+  async function request<T>(
+    path: string,
+    options: RequestOptions = {},
+    attempt = 0,
+  ): Promise<T> {
+    const { method = 'GET', body, signal, notifyOnUnauthorized = true } = options
+    const headers: Record<string, string> = { Accept: 'application/json' }
+
+    if (body) headers['Content-Type'] = 'application/json'
+
+    if (WRITE_METHODS.has(method)) {
+      const token = currentCsrfToken() ?? (await fetchCsrfToken())
+      if (token) headers[CSRF_HEADER] = token
+    }
+
+    let response: Response
+    try {
+      response = await fetch(path, {
+        method,
+        signal,
+        credentials: 'include',
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error
+      throw new ApiError('Network request failed. Please try again.', 0, 'NETWORK_ERROR')
+    }
+
+    if (!response.ok) {
+      const failure = await readFailure(response)
+
+      // A stale CSRF token is not the caller's fault — the token may have
+      // been replaced while the tab was open. Fetch a fresh one and try
+      // once more before giving up.
+      if (isCsrfFailure(failure.code) && attempt === 0 && WRITE_METHODS.has(method)) {
+        forgetCsrfToken()
+        const fresh = await fetchCsrfToken()
+        if (fresh) return request<T>(path, options, attempt + 1)
+      }
+
+      if (response.status === 401 && notifyOnUnauthorized) {
+        notifySessionExpired()
+      }
+
+      throw new ApiError(failure.message, response.status, failure.code)
+    }
+
+    if (response.status === 204) return undefined as T
+
+    const payload = (await response.json()) as ApiEnvelope<T>
+    return payload.data
   }
 
-  if (response.status === 204) return undefined as T
-
-  const payload = (await response.json()) as ApiEnvelope<T>
-  return payload.data
+  return { request, root }
 }
 
-/** Pulls the server's error message out of the failure envelope. */
-async function readErrorMessage(response: Response): Promise<string> {
+/** Whether a failure was caused by the CSRF token. */
+function isCsrfFailure(code: string): boolean {
+  return code === 'CSRF_TOKEN_MISSING' || code === 'CSRF_TOKEN_INVALID'
+}
+
+/** Tells the app that the session is gone. */
+function notifySessionExpired(): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT))
+}
+
+/** Pulls the server's error message and code out of the failure envelope. */
+async function readFailure(response: Response): Promise<{ message: string; code: string }> {
   try {
     const payload = (await response.json()) as ApiErrorEnvelope
-    if (payload?.error?.message) return payload.error.message
+    if (payload?.error?.message) {
+      return { message: payload.error.message, code: payload.error.code ?? 'UNKNOWN' }
+    }
   } catch {
     // The body was not JSON — fall through to the generic message.
   }
-  return `Request failed with status ${response.status}.`
+  return { message: `Request failed with status ${response.status}.`, code: 'UNKNOWN' }
 }
 
+/* ------------------------------------------------------------------ */
+/* Data                                                                 */
+/* ------------------------------------------------------------------ */
+
 export function createHttpClient(baseUrl: string): SpendlyApi {
-  const root = baseUrl.replace(/\/$/, '')
+  const { request, root } = createRequester(baseUrl)
 
   return {
     getSummary(range: DateRangeKey, signal) {
@@ -272,3 +379,52 @@ export function createHttpClient(baseUrl: string): SpendlyApi {
     },
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Authentication                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Client for the authentication endpoints.
+ *
+ * `me` resolves to `null` for an anonymous visitor instead of throwing, so
+ * the app can decide what to show without special-casing the error.
+ */
+export function createHttpAuthClient(baseUrl: string): AuthApi {
+  const { request, root } = createRequester(baseUrl)
+
+  return {
+    async register(input: RegisterInput) {
+      const user = await request<ServerUser>(`${root}/auth/register`, {
+        method: 'POST',
+        body: input,
+      })
+      return user
+    },
+    async login(input: LoginInput) {
+      const user = await request<ServerUser>(`${root}/auth/login`, {
+        method: 'POST',
+        body: input,
+      })
+      return user
+    },
+    async logout() {
+      await request<void>(`${root}/auth/logout`, { method: 'POST' })
+    },
+    async me(signal) {
+      try {
+        const user = await request<ServerUser>(`${root}/auth/me`, {
+          signal,
+          notifyOnUnauthorized: false,
+        })
+        return user
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) return null
+        throw error
+      }
+    },
+  }
+}
+
+export type { AuthUser }
+

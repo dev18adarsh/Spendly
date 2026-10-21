@@ -5,6 +5,13 @@ import { modelOptions, toMoney } from './model-options.js'
 
 /** The persisted shape of a monthly budget. */
 export interface BudgetAttributes {
+  /**
+   * The account that owns this budget.
+   *
+   * Every query is scoped by it, so a budget can only ever be read or
+   * changed by the account that created it.
+   */
+  userId: Types.ObjectId
   category: CategorySlug
   /** Monthly spend limit for the category. */
   limit: number
@@ -17,6 +24,11 @@ export interface BudgetAttributes {
 
 const budgetSchema = new Schema<BudgetAttributes>(
   {
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'userId is required'],
+    },
     category: {
       type: String,
       required: [true, 'category is required'],
@@ -44,9 +56,9 @@ const budgetSchema = new Schema<BudgetAttributes>(
   modelOptions({ timestamps: true }),
 )
 
-/** One budget per category per calendar month. */
-budgetSchema.index({ category: 1, month: 1, year: 1 }, { unique: true })
-budgetSchema.index({ year: 1, month: 1 })
+/** One budget per category per calendar month, per account. */
+budgetSchema.index({ userId: 1, category: 1, month: 1, year: 1 }, { unique: true })
+budgetSchema.index({ userId: 1, year: 1, month: 1 })
 
 export type BudgetDocument = HydratedDocument<BudgetAttributes>
 

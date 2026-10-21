@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express'
 import type { z } from 'zod'
 
+import { currentUser } from '../middleware/authenticate.js'
 import {
   deleteBudget as deleteBudgetService,
   getBudgetById,
@@ -23,16 +24,18 @@ type IdParams = z.infer<typeof idParamSchema>
 
 /** `GET /api/budgets` — monthly budgets with the amount already spent. */
 export const listBudgets = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const query = validated<ListBudgetsQuery>(request, 'query')
-  const budgets = await listBudgetsService(query)
+  const budgets = await listBudgetsService(userId, query)
 
   sendSuccess(response, budgets)
 })
 
 /** `GET /api/budgets/:id` — a single budget. */
 export const getBudget = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const { id } = validated<IdParams>(request, 'params')
-  const budget = await getBudgetById(id)
+  const budget = await getBudgetById(userId, id)
 
   if (!budget) {
     throw ApiError.notFound(`No budget found with id "${id}".`)
@@ -43,26 +46,29 @@ export const getBudget = asyncHandler(async (request: Request, response: Respons
 
 /** `POST /api/budgets` — create a budget, or update it if it already exists. */
 export const createBudget = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const input = validated<UpsertBudgetInput>(request, 'body')
-  const budget = await upsertBudgetService(input)
+  const budget = await upsertBudgetService(userId, input)
 
   sendSuccess(response, budget, undefined, 201)
 })
 
 /** `PUT /api/budgets` — upsert a budget by category, month and year. */
 export const upsertBudget = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const input = validated<UpsertBudgetInput>(request, 'body')
-  const budget = await upsertBudgetService(input)
+  const budget = await upsertBudgetService(userId, input)
 
   sendSuccess(response, budget)
 })
 
 /** `PATCH /api/budgets/:id` — update a budget's limit. */
 export const updateBudget = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const { id } = validated<IdParams>(request, 'params')
   const input = validated<UpdateBudgetInput>(request, 'body')
 
-  const budget = await updateBudgetById(id, input)
+  const budget = await updateBudgetById(userId, id, input)
 
   if (!budget) {
     throw ApiError.notFound(`No budget found with id "${id}".`)
@@ -73,8 +79,9 @@ export const updateBudget = asyncHandler(async (request: Request, response: Resp
 
 /** `DELETE /api/budgets/:id` — remove a budget. */
 export const deleteBudget = asyncHandler(async (request: Request, response: Response) => {
+  const { id: userId } = currentUser(request)
   const { id } = validated<IdParams>(request, 'params')
-  const deleted = await deleteBudgetService(id)
+  const deleted = await deleteBudgetService(userId, id)
 
   if (!deleted) {
     throw ApiError.notFound(`No budget found with id "${id}".`)

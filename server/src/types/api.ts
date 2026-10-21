@@ -94,3 +94,16 @@ export interface MerchantSpendDto {
   count: number
   color: string
 }
+
+/**
+ * The public profile of an account.
+ *
+ * Deliberately free of anything secret — no password hash, no session token.
+ */
+export interface UserDto {
+  id: string
+  email: string
+  name: string
+  /** ISO-8601 timestamp of when the account was created. */
+  createdAt: string
+}

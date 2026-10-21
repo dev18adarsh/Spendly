@@ -27,6 +27,21 @@ function readNodeEnv(value: string | undefined): NodeEnv {
   return value === 'production' || value === 'test' ? value : 'development'
 }
 
+/** How the session cookie is scoped across sites. */
+export type CookieSameSite = 'lax' | 'strict' | 'none'
+
+function readSameSite(value: string | undefined, fallback: CookieSameSite): CookieSameSite {
+  const raw = readString(value).toLowerCase()
+  return raw === 'lax' || raw === 'strict' || raw === 'none' ? raw : fallback
+}
+
+function readBoolean(value: string | undefined, fallback: boolean): boolean {
+  const raw = readString(value).toLowerCase()
+  if (raw === 'true' || raw === '1' || raw === 'yes') return true
+  if (raw === 'false' || raw === '0' || raw === 'no') return false
+  return fallback
+}
+
 const nodeEnv = readNodeEnv(process.env.NODE_ENV)
 const mongoUri = readString(process.env.MONGODB_URI)
 
@@ -51,6 +66,41 @@ export const env = {
   mongoServerSelectionTimeoutMs: readNumber(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS, 10_000),
   /** Maximum number of documents a single page may return. */
   maxPageSize: readNumber(process.env.MAX_PAGE_SIZE, 100),
+
+  /* --------------------------------------------------------------- */
+  /* Authentication                                                    */
+  /* --------------------------------------------------------------- */
+  /** How long a session stays valid before it has to be renewed. */
+  sessionTtlMs: readNumber(process.env.SESSION_TTL_MS, 7 * 24 * 60 * 60 * 1000),
+  /**
+   * `SameSite` policy for the session and CSRF cookies.
+   *
+   * `lax` (the default) and `strict` are enough whenever the API and the
+   * frontend share a site — `localhost:5173` and `localhost:4000` do.
+   * Deploy the API on a *different* site (a separate domain) and this must
+   * become `none`, which in turn requires `COOKIE_SECURE=true` because
+   * browsers only accept `SameSite=None` over HTTPS.
+   */
+  cookieSameSite: readSameSite(process.env.COOKIE_SAMESITE, 'lax'),
+  /** Whether the cookies are marked `Secure`. Defaults to on in production. */
+  cookieSecure: readBoolean(process.env.COOKIE_SECURE, nodeEnv === 'production'),
+  /** Optional cookie domain, e.g. `.spendly.com` to share cookies with subdomains. */
+  cookieDomain: readString(process.env.COOKIE_DOMAIN),
+  /**
+   * bcrypt cost factor. Lower in tests so the suite stays fast, higher in
+   * production so hashes are expensive to attack.
+   */
+  bcryptRounds: readNumber(process.env.BCRYPT_ROUNDS, nodeEnv === 'test' ? 4 : 12),
+  /** Failed logins allowed per account before it is temporarily locked. */
+  loginAttemptLimit: readNumber(process.env.LOGIN_ATTEMPT_LIMIT, 5),
+  /** How long an account stays locked after too many failed logins (ms). */
+  loginAttemptWindowMs: readNumber(process.env.LOGIN_ATTEMPT_WINDOW_MS, 15 * 60 * 1000),
+  /** Login requests allowed per IP within the rate-limit window. */
+  loginRateLimit: readNumber(process.env.LOGIN_RATE_LIMIT, 20),
+  /** Registration requests allowed per IP within the rate-limit window. */
+  registerRateLimit: readNumber(process.env.REGISTER_RATE_LIMIT, 5),
+  /** Length of the rate-limit window in milliseconds. */
+  rateLimitWindowMs: readNumber(process.env.RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
 } as const
 
 /**

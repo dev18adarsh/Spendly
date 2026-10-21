@@ -1,3 +1,5 @@
+import type { UserDto } from './api.js'
+
 declare global {
   namespace Express {
     interface Request {
@@ -10,6 +12,11 @@ declare global {
         query?: unknown
         params?: unknown
       }
+      /**
+       * The account behind the current session.
+       * Set by `requireAuth`; absent on public routes.
+       */
+      user?: UserDto
     }
   }
 }

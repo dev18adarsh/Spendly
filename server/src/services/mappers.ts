@@ -1,6 +1,12 @@
 import { findCategoryDefinition } from '../constants/categories.js'
 import type { TransactionStatus, TransactionType } from '../constants/payment-methods.js'
-import type { BudgetDto, CategoryDto, CategorySpendDto, TransactionDto } from '../types/api.js'
+import type {
+  BudgetDto,
+  CategoryDto,
+  CategorySpendDto,
+  TransactionDto,
+  UserDto,
+} from '../types/api.js'
 
 /**
  * Presentation metadata for a category slug.
@@ -72,6 +78,16 @@ export interface CategorySource {
   order: number
 }
 
+/** The account fields a user mapper accepts. */
+export interface UserSource {
+  _id?: unknown
+  id?: unknown
+  email: string
+  name: string
+  createdAt?: Date | string | undefined
+  updatedAt?: Date | string | undefined
+}
+
 /** Reads the document id from either `_id` or the serialised `id` field. */
 function resolveId(source: { _id?: unknown; id?: unknown }): string {
   const value = source._id ?? source.id
@@ -133,6 +149,21 @@ export function toCategoryDto(category: CategorySource): CategoryDto {
     color: category.color,
     icon: category.icon,
     order: category.order,
+  }
+}
+
+/**
+ * The public profile of an account.
+ *
+ * The password hash is not part of the source type at all, so it cannot
+ * reach the client by accident.
+ */
+export function toUserDto(user: UserSource): UserDto {
+  return {
+    id: resolveId(user),
+    email: user.email,
+    name: user.name,
+    createdAt: toIso(user.createdAt, new Date(0).toISOString()),
   }
 }
 

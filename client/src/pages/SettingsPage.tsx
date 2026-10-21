@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Bell, Database, Info, Palette, ShieldCheck, User } from 'lucide-react'
+import { Bell, Database, Info, LogOut, Palette, ShieldCheck, User } from 'lucide-react'
 
+import { useAuth } from '@/auth/AuthContext'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -10,6 +11,7 @@ import { Select } from '@/components/ui/Select'
 import { Toggle } from '@/components/ui/Toggle'
 import { useAppConfig } from '@/config/app-config'
 import { config } from '@/config/env'
+import { initialsOf } from '@/lib/user'
 
 const currencyOptions = [
   { value: 'usd', label: 'USD — US Dollar' },
@@ -26,13 +28,16 @@ const dateFormatOptions = [
 
 export function SettingsPage() {
   const { simulateApiErrors, setSimulateApiErrors } = useAppConfig()
-  const [name, setName] = useState('Alex Doe')
-  const [email, setEmail] = useState('alex@example.com')
+  const { user, signOut } = useAuth()
   const [currency, setCurrency] = useState('usd')
   const [dateFormat, setDateFormat] = useState('mmm-dd-yyyy')
   const [emailAlerts, setEmailAlerts] = useState(true)
   const [weeklyDigest, setWeeklyDigest] = useState(true)
   const [budgetAlerts, setBudgetAlerts] = useState(false)
+
+  const isDemo = config.dataSource !== 'api'
+  const name = user?.name ?? 'Alex Doe'
+  const email = user?.email ?? 'alex@example.com'
 
   return (
     <>
@@ -41,16 +46,18 @@ export function SettingsPage() {
         description="Profile, preferences and how Spendly sources your data."
       />
 
-      <div
-        role="note"
-        className="mb-4 flex items-start gap-3 rounded-card border border-info/25 bg-info/8 px-4 py-3 text-sm text-info"
-      >
-        <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-        <p className="leading-relaxed">
-          This preview build stores nothing. The controls below illustrate the settings surface —
-          values are not written to an account, a database or a server.
-        </p>
-      </div>
+      {isDemo ? (
+        <div
+          role="note"
+          className="mb-4 flex items-start gap-3 rounded-card border border-info/25 bg-info/8 px-4 py-3 text-sm text-info"
+        >
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <p className="leading-relaxed">
+            This preview build stores nothing. The controls below illustrate the settings surface —
+            values are not written to an account, a database or a server.
+          </p>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -59,24 +66,43 @@ export function SettingsPage() {
             description="How you appear across Spendly"
             actions={
               <span className="flex size-8 items-center justify-center rounded-full border border-line bg-surface-3 text-[11px] font-semibold text-ink-muted">
-                AD
+                {initialsOf(name)}
               </span>
             }
           />
           <div className="grid gap-4 px-5 pb-5">
-            <Input label="Full name" value={name} onChange={(event) => setName(event.target.value)} />
+            <Input label="Full name" value={name} readOnly={!isDemo} />
             <Input
               label="Email"
               type="email"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              hint="Used for receipts and alerts."
+              readOnly={!isDemo}
+              hint={isDemo ? 'Used for receipts and alerts.' : 'Your sign-in address.'}
             />
-            <div className="flex justify-end">
-              <Button variant="secondary" size="sm">
-                Save profile
-              </Button>
-            </div>
+
+            {isDemo ? (
+              <div className="flex justify-end">
+                <Button variant="secondary" size="sm">
+                  Save profile
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs leading-relaxed text-ink-faint">
+                  Your profile is managed by your account.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={<LogOut className="size-4" aria-hidden="true" />}
+                  onClick={() => {
+                    void signOut()
+                  }}
+                >
+                  Sign out
+                </Button>
+              </div>
+            )}
           </div>
         </Card>
 
@@ -165,7 +191,9 @@ export function SettingsPage() {
             <div className="flex items-start gap-2.5 text-xs leading-relaxed text-ink-faint">
               <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <p>
-                No credentials are stored, and no data leaves this browser in the current build.
+                {isDemo
+                  ? 'No credentials are stored, and no data leaves this browser in the current build.'
+                  : 'Your session lives in an HTTP-only cookie. No token is ever written to localStorage.'}
               </p>
             </div>
           </div>

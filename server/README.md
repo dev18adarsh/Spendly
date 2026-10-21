@@ -32,6 +32,16 @@ mandatory in production — the process refuses to start without it.
 | `MONGODB_URI` | _(empty)_ | MongoDB Atlas connection string — never committed, never sent to the browser |
 | `MONGODB_DB_NAME` | `spendly` | Database name inside the cluster |
 | `MONGODB_SERVER_SELECTION_TIMEOUT_MS` | `10000` | How long to wait for MongoDB before failing |
+| `SESSION_TTL_MS` | `604800000` | How long a session stays valid (7 days) |
+| `COOKIE_SAMESITE` | `lax` | `SameSite` policy for the session and CSRF cookies (`lax` · `strict` · `none`) |
+| `COOKIE_SECURE` | `true` in production | Whether the cookies are marked `Secure` |
+| `COOKIE_DOMAIN` | _(empty)_ | Optional cookie domain, e.g. `.spendly.com` |
+| `BCRYPT_ROUNDS` | `12` (`4` in tests) | bcrypt cost factor for password hashing |
+| `LOGIN_ATTEMPT_LIMIT` | `5` | Failed sign-ins per account before the account is locked |
+| `LOGIN_ATTEMPT_WINDOW_MS` | `900000` | How long an account stays locked (15 minutes) |
+| `LOGIN_RATE_LIMIT` | `20` | Sign-in requests per IP per window |
+| `REGISTER_RATE_LIMIT` | `5` | Registration requests per IP per window |
+| `RATE_LIMIT_WINDOW_MS` | `900000` | Length of the rate-limit window |
 
 ### When MongoDB is unavailable
 
@@ -71,6 +81,11 @@ envelope. The shape is identical for every route.
 | `GET` | `/api/health` | Liveness probe — status, uptime, database state and last connection error |
 | `GET` | `/api/health/ready` | Readiness probe — `503` while MongoDB is unavailable |
 | `GET` | `/api/categories` | The category taxonomy |
+| `POST` | `/api/auth/register` | Create an account and sign in (`201`) |
+| `POST` | `/api/auth/login` | Sign in and receive a session cookie |
+| `POST` | `/api/auth/logout` | Revoke the session and clear the cookies (`204`) |
+| `GET` | `/api/auth/me` | The account behind the current session |
+| `GET` | `/api/auth/csrf` | The CSRF token the client has to repeat on writes |
 | `GET` | `/api/transactions` | List transactions — filtered, sorted, paginated |
 | `POST` | `/api/transactions` | Create a transaction |
 | `GET` | `/api/transactions/:id` | Fetch a single transaction |
@@ -86,6 +101,19 @@ envelope. The shape is identical for every route.
 | `GET` | `/api/analytics/cashflow` | Income/expense series — daily, weekly or monthly buckets |
 | `GET` | `/api/analytics/categories` | Spend per category with share of total |
 | `GET` | `/api/analytics/merchants` | Merchants ranked by spend |
+
+### Public and private routes
+
+| Route | Access |
+| --- | --- |
+| `GET /api/health`, `GET /api/health/ready`, `GET /api/categories` | Public |
+| `POST /api/auth/register`, `POST /api/auth/login` | Public, rate limited, CSRF protected |
+| `POST /api/auth/logout`, `GET /api/auth/me` | Public, CSRF protected (logout works without a session) |
+| `GET /api/auth/csrf` | Public |
+| Everything under `/api/transactions`, `/api/budgets`, `/api/analytics` | **Requires a session** |
+
+A request to a private route without a valid session is a `401 UNAUTHORIZED` (or
+`401 SESSION_EXPIRED` when a session cookie was present but is no longer valid).
 
 ### Query parameters
 
@@ -136,15 +164,98 @@ curl -X POST http://localhost:4000/api/transactions \
 }
 ```
 
+## Authentication
+
+Spendly uses **cookie sessions**. There is no bearer token, no `Authorization` header and
+nothing for the browser to store — the credential lives in an HTTP-only cookie that the
+browser attaches on its own.
+
+### Signing in
+
+```bash
+# 1. Ask for a CSRF token (the API also sets it as a cookie).
+curl -c cookies.txt http://localhost:4000/api/auth/csrf
+
+# 2. Sign in, repeating the token in the header.
+curl -b cookies.txt -c cookies.txt -X POST http://localhost:4000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -H 'X-CSRF-Token: <token>' \
+  -d '{"email":"alex@example.com","password":"Str0ngPassw0rd"}'
+```
+
+The response sets two cookies:
+
+| Cookie | HTTP-only | Purpose |
+| --- | --- | --- |
+| `spendly_session` | yes | The opaque session token. Not readable by scripts. |
+| `spendly_csrf` | no | The CSRF token, which the client copies into the `X-CSRF-Token` header. |
+
+Only the SHA-256 hash of the session token is stored in the database, so a leaked
+database does not hand out usable sessions. Signing out deletes the session row, which
+revokes the session immediately — replaying the old cookie afterwards fails.
+
+### Passwords
+
+Passwords are hashed with **bcrypt** (`BCRYPT_ROUNDS`, 12 by default). The plaintext is
+never stored, never logged and never returned: the hash is excluded from queries by
+default (`select: false`) and stripped by the serialiser as well.
+
+### CSRF protection
+
+Every state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) has to repeat the CSRF
+token in the `X-CSRF-Token` header. The value has to match the `spendly_csrf` cookie, and
+the `Origin` header has to be one of the configured `CORS_ORIGINS`. A request that fails
+either check is a `403` (`CSRF_TOKEN_MISSING`, `CSRF_TOKEN_INVALID` or
+`ORIGIN_NOT_ALLOWED`).
+
+The token is *not* rotated when you sign in — a client that fetched one before signing in
+keeps working. The session itself is new on every sign-in, which is the part that has to
+change.
+
+### Rate limiting
+
+Two independent limits protect the sign-in endpoints:
+
+* **Per IP** — 20 sign-in and 5 registration requests per 15 minutes (`LOGIN_RATE_LIMIT`,
+  `REGISTER_RATE_LIMIT`).
+* **Per account** — 5 failed sign-ins lock the account for 15 minutes
+  (`LOGIN_ATTEMPT_LIMIT`, `LOGIN_ATTEMPT_WINDOW_MS`). Only failures count, and a
+  successful sign-in clears the counter.
+
+Both answer `429` with a `LOGIN_RATE_LIMITED` / `REGISTER_RATE_LIMITED` code.
+
+### Enumeration safety
+
+An unknown email address and a wrong password produce the exact same answer — `401` with
+the code `INVALID_CREDENTIALS` and the message "The email address and password do not
+match." — and an unknown address still pays the cost of a bcrypt comparison, so the
+response time does not give the game away either.
+
+### Data ownership
+
+Every transaction and budget carries a `userId`. All queries are scoped by the signed-in
+account, so changing an id in a request never reaches another account's data: reading
+somebody else's document answers `404` (not `403` — the API does not confirm that it
+exists) and writing to it changes nothing.
+
 ## Data model
 
-**Transaction** — `amount` (positive), `type` (`income` · `expense`), `category`,
-`description`, `date`, optional `paymentMethod`, optional `merchant` / `notes`, `status`
-(`cleared` · `pending`), plus `createdAt` / `updatedAt`. Indexed on `date`, and on
-`category` and `type` combined with `date`.
+**Transaction** — `userId` (the owner), `amount` (positive), `type` (`income` · `expense`),
+`category`, `description`, `date`, optional `paymentMethod`, optional `merchant` / `notes`,
+`status` (`cleared` · `pending`), plus `createdAt` / `updatedAt`. Indexed on `date`, on
+`category` and `type` combined with `date`, and on `userId` combined with `date`.
 
-**Budget** — `category`, `limit` (monthly limit), `month`, `year`, plus timestamps. One
-budget per category per calendar month, enforced by a unique compound index.
+**Budget** — `userId` (the owner), `category`, `limit` (monthly limit), `month`, `year`,
+plus timestamps. One budget per category per calendar month *per account*, enforced by a
+unique compound index on `userId`, `category`, `month` and `year`.
+
+**User** — `email` (unique, normalised to lower case), `name`, `passwordHash` (bcrypt,
+`select: false`), plus `createdAt` / `updatedAt`. The API only ever exposes `id`, `email`,
+`name` and `createdAt`.
+
+**Session** — `tokenHash` (SHA-256 of the session token, unique), `userId`, `expiresAt`,
+`createdAt`. A TTL index removes expired sessions; signing out deletes the row right
+away.
 
 **Category** — `slug`, `name`, `color`, `icon`, `order`. Reference data seeded from
 `src/constants/categories.ts`; the same slugs are mirrored by the web client.
@@ -152,21 +263,29 @@ budget per category per calendar month, enforced by a unique compound index.
 Money is stored with two decimal places, and budget periods use UTC month boundaries so
 a month means the same thing regardless of where the request came from.
 
+### Existing data
+
+Transactions and budgets created before authentication existed have no `userId`. The
+models require it, so those documents are no longer reachable through the API — clear
+them or backfill them with the id of an account before switching the client over to
+`VITE_DATA_SOURCE=api`.
+
 ## Layout
 
 ```
 src/
-├── app.ts                   Express app factory (helmet, CORS, JSON, routes, error pipeline)
+├── app.ts                   Express app factory (helmet, CORS, cookies, routes, error pipeline)
 ├── index.ts                 Bootstrap: validate env → connect → seed → listen → shutdown
 ├── config/
 │   ├── env.ts               Environment parsing, redaction, production assertions
+│   ├── cookies.ts           Cookie names and the security flags for them
 │   └── database.ts          Mongoose connection state, errors and reconnection
 ├── constants/               Category taxonomy, payment methods, transaction types
 ├── models/                  Mongoose schemas with explicit document interfaces
-├── services/                Data access and aggregations (transactions, budgets, analytics)
+├── services/                Data access and aggregations (transactions, budgets, analytics, auth)
 ├── controllers/             HTTP handlers — request in, response out
 ├── routes/                  Route tables that wire middleware to controllers
-├── middleware/              Validation, database guard, error handler, not-found
+├── middleware/              Validation, database guard, authentication, CSRF, rate limiting
 ├── validators/              Zod schemas for bodies, queries and params
 ├── utils/                   Envelope, pagination, ApiError, async handler
 ├── types/                   API DTOs and Express request augmentation
@@ -188,3 +307,12 @@ The suite runs against a real MongoDB (an in-memory instance started per test fi
 covers transaction CRUD, filtering, pagination, budgets, analytics, the health probes,
 CORS, validation failures and — importantly — the behaviour of the API when MongoDB is
 unreachable.
+
+Two files cover authentication specifically:
+
+* `src/test/auth.test.ts` — registration, bcrypt storage, email normalisation, duplicate
+  addresses, validation, sign-in, cookie flags, the enumeration-safe error, the account
+  lockout, signing out, `/me`, the `401`s on private routes and the CSRF checks.
+* `src/test/isolation.test.ts` — two accounts working side by side: neither can list,
+  read, change or delete the other's transactions and budgets, budget spend is counted
+  per account, analytics never mix the two, and signing out locks everything down.

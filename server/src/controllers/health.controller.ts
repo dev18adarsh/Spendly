@@ -10,7 +10,7 @@ import { env } from '../config/env.js'
 import { sendSuccess } from '../utils/response.js'
 
 const SERVICE_NAME = 'spendly-api'
-const SERVICE_VERSION = '0.2.0'
+const SERVICE_VERSION = '0.3.0'
 
 function databaseReport(): Record<string, unknown> {
   return {

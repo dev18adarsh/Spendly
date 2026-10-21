@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { createBrowserRouter, useRouteError, Link } from 'react-router-dom'
 
+import { GuestRoute, ProtectedRoute } from '@/auth/ProtectedRoute'
 import { AppShell } from '@/components/layout/AppShell'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -22,6 +23,12 @@ const SettingsPage = lazy(() =>
 )
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
+)
+const LoginPage = lazy(() =>
+  import('@/pages/LoginPage').then((module) => ({ default: module.LoginPage })),
+)
+const RegisterPage = lazy(() =>
+  import('@/pages/RegisterPage').then((module) => ({ default: module.RegisterPage })),
 )
 
 /** Placeholder rendered while a route chunk is downloading. */
@@ -75,8 +82,25 @@ function RouteError() {
 
 export const router = createBrowserRouter([
   {
+    // Sign in and sign up live outside the application shell — there is no
+    // navigation to offer before somebody is signed in.
+    path: '/login',
+    element: <GuestRoute>{withSuspense(<LoginPage />)}</GuestRoute>,
+    errorElement: <RouteError />,
+  },
+  {
+    path: '/register',
+    element: <GuestRoute>{withSuspense(<RegisterPage />)}</GuestRoute>,
+    errorElement: <RouteError />,
+  },
+  {
     path: '/',
-    element: <AppShell />,
+    // Everything below the shell needs a session.
+    element: (
+      <ProtectedRoute>
+        <AppShell />
+      </ProtectedRoute>
+    ),
     errorElement: <RouteError />,
     children: [
       { index: true, element: withSuspense(<DashboardPage />) },

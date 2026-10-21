@@ -17,6 +17,7 @@ successful-looking response.
 | Icons | Lucide React |
 | Backend | Node.js · Express 5 · TypeScript · Zod |
 | Database | MongoDB Atlas (via Mongoose 9) |
+| Auth | Cookie sessions · bcrypt · double-submit CSRF |
 | Tests | Node test runner · Supertest · mongodb-memory-server |
 
 ## Repository layout
@@ -26,10 +27,12 @@ spendly/
 ├── client/                    # React + Vite frontend
 │   ├── src/
 │   │   ├── components/
+│   │   │   ├── auth/           # Sign-in and sign-up shell
 │   │   │   ├── charts/        # Sparkline and other chart primitives
 │   │   │   ├── dashboard/     # Dashboard-specific composites
 │   │   │   ├── layout/        # App shell, sidebar, top bar, page header
 │   │   │   └── ui/            # Reusable primitives (Button, Card, Modal, Input…)
+│   │   ├── auth/              # Auth context, provider and route guards
 │   │   ├── config/            # Runtime config + app-level toggles
 │   │   ├── data/mock/         # Sample data — isolated from the API contract
 │   │   ├── hooks/             # useAsyncData, useCategories, useMediaQuery…
@@ -47,7 +50,7 @@ spendly/
     │   ├── services/          # Data access and aggregations
     │   ├── controllers/       # HTTP handlers
     │   ├── routes/            # Route tables
-    │   ├── middleware/        # Validation, database guard, error handling
+    │   ├── middleware/        # Validation, database guard, authentication, CSRF, rate limiting
     │   ├── validators/        # Zod request schemas
     │   ├── utils/             # Response envelope, pagination, ApiError
     │   ├── types/             # API DTOs
@@ -94,7 +97,8 @@ components ─▶ useAsyncData ─▶ services/index.ts ─┬─▶ services/mo
 ```
 
 * **Mock** (default) serves the sample ledger in `client/src/data/mock/` with simulated
-  latency, so loading and error states are real while you work offline.
+  latency, so loading and error states are real while you work offline. It is a preview
+  build: it signs you in as a demo account and never writes anything anywhere.
 * **API** is wired up end-to-end. Set `VITE_DATA_SOURCE=api` in `client/.env.local` and
   the same components read from the server: the HTTP adapter unwraps the response
   envelope, translates the client's `range`/`categoryId` vocabulary into the API's
@@ -104,6 +108,28 @@ components ─▶ useAsyncData ─▶ services/index.ts ─┬─▶ services/mo
 The server is the source of truth for the live path; the mock layer exists so the
 frontend stays usable without a database.
 
+## Accounts and sessions
+
+Spendly signs people in with **cookie sessions** — no bearer token, no `Authorization`
+header, and nothing for the browser to keep in `localStorage`.
+
+* The session lives in an **HTTP-only cookie**; only its SHA-256 hash is stored in the
+  database, and signing out deletes that row, which revokes the session immediately.
+* Passwords are hashed with **bcrypt**. The hash is excluded from queries by default and
+  never leaves the server.
+* Every write repeats a **CSRF token** in the `X-CSRF-Token` header, and the `Origin`
+  header has to be one of the allowed origins.
+* Sign-in is **rate limited** per IP, and an account is locked for 15 minutes after 5
+  failed attempts.
+* An unknown email and a wrong password answer exactly the same way, so the API does not
+  leak which addresses are registered.
+* Every transaction and budget belongs to an account. All queries are scoped by the
+  signed-in user, so changing an id in a request never reaches somebody else's data.
+
+In the client the `AuthProvider` restores the session on load, `ProtectedRoute` keeps
+anonymous visitors out of the app, and a `401` from anywhere signs the person out and
+brings them back to the sign-in screen with an explanation.
+
 ## The API
 
 A JSON REST API under `/api`, documented in detail in [`server/README.md`](server/README.md).
@@ -112,6 +138,11 @@ A JSON REST API under `/api`, documented in detail in [`server/README.md`](serve
 | --- | --- | --- |
 | `GET` | `/api/health` | Liveness probe with the database state and connection error |
 | `GET` | `/api/health/ready` | Readiness probe — `503` while MongoDB is unavailable |
+| `POST` | `/api/auth/register` | Create an account and sign in |
+| `POST` | `/api/auth/login` | Sign in and receive a session cookie |
+| `POST` | `/api/auth/logout` | Revoke the session and clear the cookies |
+| `GET` | `/api/auth/me` | The account behind the current session |
+| `GET` | `/api/auth/csrf` | The CSRF token the client repeats on writes |
 | `GET` `POST` | `/api/transactions` | List (filtered, sorted, paginated) and create |
 | `GET` `PATCH` `DELETE` | `/api/transactions/:id` | Read, update and remove a transaction |
 | `GET` `POST` `PUT` | `/api/budgets` | Monthly budgets, with the amount already spent |
@@ -121,6 +152,9 @@ A JSON REST API under `/api`, documented in detail in [`server/README.md`](serve
 | `GET` | `/api/analytics/cashflow` | Income/expense series over a range |
 | `GET` | `/api/analytics/categories` | Spend per category with share of total |
 | `GET` | `/api/analytics/merchants` | Merchants ranked by spend |
+
+Everything under `/api/transactions`, `/api/budgets` and `/api/analytics` needs a
+session; a request without one is a `401`.
 
 Every response uses the same envelope — `{ success, data, meta }` or
 `{ success, false, error }` — and every failure carries a status, a stable code and a
@@ -155,7 +189,7 @@ hairline borders, and a single mint accent:
 
 ## Roadmap
 
-1. Authentication and per-account data isolation.
-2. Recurring transactions and import from bank statements.
-3. Budget periods beyond monthly, and per-category rollover.
-4. Real-time updates (server-sent events) for the dashboard.
+1. Recurring transactions and import from bank statements.
+2. Budget periods beyond monthly, and per-category rollover.
+3. Real-time updates (server-sent events) for the dashboard.
+4. Password reset and email verification.

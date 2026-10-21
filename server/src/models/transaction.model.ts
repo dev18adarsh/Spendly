@@ -18,6 +18,13 @@ import { modelOptions, toMoney } from './model-options.js'
  * contract instead of relying on schema inference.
  */
 export interface TransactionAttributes {
+  /**
+   * The account that owns this transaction.
+   *
+   * Every query is scoped by it, so a transaction can only ever be read or
+   * changed by the account that created it.
+   */
+  userId: Types.ObjectId
   /** Always positive — `type` carries the direction. */
   amount: number
   type: TransactionType
@@ -36,6 +43,11 @@ export interface TransactionAttributes {
 
 const transactionSchema = new Schema<TransactionAttributes>(
   {
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'userId is required'],
+    },
     amount: {
       type: Number,
       required: [true, 'amount is required'],
@@ -86,9 +98,9 @@ const transactionSchema = new Schema<TransactionAttributes>(
   modelOptions({ timestamps: true }),
 )
 
-transactionSchema.index({ date: -1 })
-transactionSchema.index({ category: 1, date: -1 })
-transactionSchema.index({ type: 1, date: -1 })
+transactionSchema.index({ userId: 1, date: -1 })
+transactionSchema.index({ userId: 1, category: 1, date: -1 })
+transactionSchema.index({ userId: 1, type: 1, date: -1 })
 
 export type TransactionDocument = HydratedDocument<TransactionAttributes>
 

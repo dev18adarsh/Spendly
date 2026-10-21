@@ -1,8 +1,11 @@
 import { Database, LogOut, Sparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import { useAuth } from '@/auth/AuthContext'
 import { BrandMark } from '@/components/layout/BrandMark'
 import { NavList } from '@/components/layout/NavList'
+import { config } from '@/config/env'
+import { initialsOf } from '@/lib/user'
 
 export interface SidebarProps {
   /** Rendered inside the mobile drawer instead of the fixed desktop rail. */
@@ -16,6 +19,8 @@ export interface SidebarProps {
  */
 export function Sidebar({ variant = 'desktop', onNavigate }: SidebarProps) {
   const isDrawer = variant === 'drawer'
+  const { user, signOut } = useAuth()
+  const isDemo = config.dataSource !== 'api'
 
   return (
     <div
@@ -33,43 +38,53 @@ export function Sidebar({ variant = 'desktop', onNavigate }: SidebarProps) {
         </p>
         <NavList onNavigate={onNavigate} />
 
-        <div className="mt-6 rounded-card border border-line bg-surface-2 p-3.5">
-          <div className="flex items-center gap-2 text-brand">
-            <Sparkles className="size-3.5" aria-hidden="true" />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.12em]">Preview build</span>
+        {isDemo ? (
+          <div className="mt-6 rounded-card border border-line bg-surface-2 p-3.5">
+            <div className="flex items-center gap-2 text-brand">
+              <Sparkles className="size-3.5" aria-hidden="true" />
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em]">Preview build</span>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-ink-faint">
+              You are viewing realistic sample data. Nothing is saved to an account yet.
+            </p>
+            <Link
+              to="/settings"
+              onClick={onNavigate}
+              className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-ink-muted transition-colors hover:text-brand"
+            >
+              <Database className="size-3.5" aria-hidden="true" />
+              Data source
+            </Link>
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-ink-faint">
-            You are viewing realistic sample data. Nothing is saved to an account yet.
-          </p>
-          <Link
-            to="/settings"
-            onClick={onNavigate}
-            className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-ink-muted transition-colors hover:text-brand"
-          >
-            <Database className="size-3.5" aria-hidden="true" />
-            Data source
-          </Link>
-        </div>
+        ) : null}
       </div>
 
-      <div className="border-t border-line p-3">
-        <div className="flex items-center gap-3 rounded-control px-2 py-2">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line bg-surface-3 text-xs font-semibold text-ink-muted">
-            AD
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-ink">Alex Doe</p>
-            <p className="truncate text-[11px] text-ink-faint">alex@example.com</p>
+      {user ? (
+        <div className="border-t border-line p-3">
+          <div className="flex items-center gap-3 rounded-control px-2 py-2">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line bg-surface-3 text-xs font-semibold text-ink-muted">
+              {initialsOf(user.name)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium text-ink">{user.name}</p>
+              <p className="truncate text-[11px] text-ink-faint">{user.email}</p>
+            </div>
+            {isDemo ? null : (
+              <button
+                type="button"
+                aria-label="Sign out"
+                title="Sign out"
+                onClick={() => {
+                  void signOut()
+                }}
+                className="rounded-control p-1.5 text-ink-faint transition-colors hover:bg-surface-2 hover:text-ink"
+              >
+                <LogOut className="size-4" aria-hidden="true" />
+              </button>
+            )}
           </div>
-          <button
-            type="button"
-            aria-label="Sign out"
-            className="rounded-control p-1.5 text-ink-faint transition-colors hover:bg-surface-2 hover:text-ink"
-          >
-            <LogOut className="size-4" aria-hidden="true" />
-          </button>
         </div>
-      </div>
+      ) : null}
     </div>
   )
 }
