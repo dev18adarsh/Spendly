@@ -10,6 +10,8 @@ import type {
   SpendlyApi,
   SummaryMetrics,
   Transaction,
+  TransactionDraft,
+  TransactionDraftUpdate,
   TransactionQuery,
 } from '@/services/types'
 import type { DateRangeKey } from '@/services/types'
@@ -31,16 +33,28 @@ import { CSRF_HEADER, currentCsrfToken, forgetCsrfToken, rememberCsrfToken } fro
  * ever stored in `localStorage`.
  */
 
+/** A field-level problem reported by the API's validation layer. */
+export interface ApiFieldIssue {
+  field: string
+  message: string
+}
+
 export class ApiError extends Error {
   readonly status: number
   /** The stable error code the API returns, e.g. `INVALID_CREDENTIALS`. */
   readonly code: string
+  /**
+   * Field-level issues, when the API rejected the payload.
+   * The API answers a 422 with one entry per offending field.
+   */
+  readonly details: ApiFieldIssue[]
 
-  constructor(message: string, status: number, code = 'UNKNOWN') {
+  constructor(message: string, status: number, code = 'UNKNOWN', details: ApiFieldIssue[] = []) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.details = details
   }
 }
 
@@ -84,7 +98,6 @@ interface ApiErrorEnvelope {
     details?: unknown
   }
 }
-
 /** The server's view of an account. */
 interface ServerUser {
   id: string
@@ -111,6 +124,8 @@ interface ServerTransaction {
   date: string
   paymentMethod: string | null
   status: 'cleared' | 'pending'
+  createdAt: string
+  updatedAt: string
 }
 
 interface ServerBudget {
@@ -179,6 +194,37 @@ function toClientCategory(dto: ServerCategory): Category {
   }
 }
 
+/**
+ * Maps a client draft onto the API's write payload.
+ *
+ * The API calls the headline of an entry `description` and treats `merchant`
+ * as an optional refinement. The client shows a single field, so both carry
+ * the same value — search then matches either one.
+ *
+ * Only defined fields are included, which is what makes the same function
+ * usable for a `POST` (everything) and a `PATCH` (only what changed).
+ */
+function toServerPayload(draft: TransactionDraft | TransactionDraftUpdate): Record<string, unknown> {
+  const payload: Record<string, unknown> = {}
+
+  if (draft.amount !== undefined) payload.amount = draft.amount
+  if (draft.type !== undefined) payload.type = draft.type
+  if (draft.categoryId !== undefined) payload.category = draft.categoryId
+
+  if (draft.merchant !== undefined) {
+    const description = draft.merchant.trim()
+    payload.description = description
+    if (description) payload.merchant = description
+  }
+
+  if (draft.note !== undefined) payload.notes = draft.note.trim()
+  if (draft.date !== undefined) payload.date = draft.date
+  if (draft.method !== undefined) payload.paymentMethod = draft.method
+  if (draft.status !== undefined) payload.status = draft.status
+
+  return payload
+}
+
 /* ------------------------------------------------------------------ */
 /* Query helpers                                                       */
 /* ------------------------------------------------------------------ */
@@ -212,7 +258,9 @@ const DEFAULT_TRANSACTION_LIMIT = 100
 function toQueryString(query: TransactionQuery = {}): string {
   const params = new URLSearchParams()
 
-  if (query.search) params.set('search', query.search)
+  // The API rejects a blank search term, so only a real term is sent.
+  const search = query.search?.trim()
+  if (search) params.set('search', search)
   if (query.categoryId && query.categoryId !== 'all') params.set('category', query.categoryId)
   if (query.type && query.type !== 'all') params.set('type', query.type)
   if (query.range) {
@@ -303,7 +351,7 @@ function createRequester(baseUrl: string) {
         notifySessionExpired()
       }
 
-      throw new ApiError(failure.message, response.status, failure.code)
+      throw new ApiError(failure.message, response.status, failure.code, failure.details)
     }
 
     if (response.status === 204) return undefined as T
@@ -327,16 +375,40 @@ function notifySessionExpired(): void {
 }
 
 /** Pulls the server's error message and code out of the failure envelope. */
-async function readFailure(response: Response): Promise<{ message: string; code: string }> {
+async function readFailure(
+  response: Response,
+): Promise<{ message: string; code: string; details: ApiFieldIssue[] }> {
   try {
     const payload = (await response.json()) as ApiErrorEnvelope
     if (payload?.error?.message) {
-      return { message: payload.error.message, code: payload.error.code ?? 'UNKNOWN' }
+      return {
+        message: payload.error.message,
+        code: payload.error.code ?? 'UNKNOWN',
+        details: toFieldIssues(payload.error.details),
+      }
     }
   } catch {
     // The body was not JSON — fall through to the generic message.
   }
-  return { message: `Request failed with status ${response.status}.`, code: 'UNKNOWN' }
+  return { message: `Request failed with status ${response.status}.`, code: 'UNKNOWN', details: [] }
+}
+
+/**
+ * Normalises the `details` payload of a failure envelope.
+ *
+ * The API answers a validation error with `[{ field, message }]`, but other
+ * failures may carry anything at all — so anything unexpected is dropped
+ * rather than rendered.
+ */
+function toFieldIssues(details: unknown): ApiFieldIssue[] {
+  if (!Array.isArray(details)) return []
+
+  return details.flatMap((entry) => {
+    if (typeof entry !== 'object' || entry === null) return []
+    const record = entry as Record<string, unknown>
+    if (typeof record.field !== 'string' || typeof record.message !== 'string') return []
+    return [{ field: record.field, message: record.message }]
+  })
 }
 
 /* ------------------------------------------------------------------ */
@@ -376,6 +448,36 @@ export function createHttpClient(baseUrl: string): SpendlyApi {
         `${root}/analytics/merchants?range=${range}&limit=${limit}`,
         { signal },
       )
+    },
+    async createTransaction(draft) {
+      const transaction = await request<ServerTransaction>(`${root}/transactions`, {
+        method: 'POST',
+        body: toServerPayload(draft),
+      })
+      return toClientTransaction(transaction)
+    },
+    async updateTransaction(id, draft) {
+      const transaction = await request<ServerTransaction>(
+        `${root}/transactions/${encodeURIComponent(id)}`,
+        { method: 'PATCH', body: toServerPayload(draft) },
+      )
+      return toClientTransaction(transaction)
+    },
+    async deleteTransaction(id) {
+      await request<void>(`${root}/transactions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    },
+    async createBudget(draft) {
+      const now = new Date()
+      const budget = await request<ServerBudget>(`${root}/budgets`, {
+        method: 'POST',
+        body: {
+          category: draft.categoryId,
+          limit: draft.limit,
+          month: draft.month ?? now.getMonth() + 1,
+          year: draft.year ?? now.getFullYear(),
+        },
+      })
+      return toClientBudget(budget)
     },
   }
 }

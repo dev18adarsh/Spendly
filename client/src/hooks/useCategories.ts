@@ -22,6 +22,9 @@ export function useCategories(): UseCategoriesResult {
   const { data, error, status, refetch } = useAsyncData<Category[]>(
     (signal) => api.getCategories(signal),
     [],
+    // The taxonomy is reference data — it never changes because of a
+    // transaction, so it opts out of the global invalidation.
+    { refreshOnChange: false },
   )
 
   const categories = data ?? []

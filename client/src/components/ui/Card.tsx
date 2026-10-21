@@ -15,7 +15,11 @@ export function Card({ interactive, flush, className, children, ...props }: Card
       className={cn(
         'rounded-card border border-line bg-surface shadow-[0_1px_2px_rgba(0,0,0,0.35)]',
         interactive && 'card-hover',
-        flush && 'overflow-hidden',
+        // `overflow-clip` trims the rounded corners just like `overflow-hidden`
+        // but, unlike it, does not turn the card into a scroll container — so
+        // `position: sticky` children still stick to the viewport instead of
+        // being offset by the card instead of the page.
+        flush && 'overflow-clip',
         className,
       )}
       {...props}
@@ -80,3 +84,4 @@ export function CardFooter({ className, children, ...props }: HTMLAttributes<HTM
 export function CardDivider({ className }: { className?: string }) {
   return <div className={cn('h-px w-full bg-line', className)} aria-hidden="true" />
 }
+

@@ -1,15 +1,13 @@
-import { useEffect, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { Bell, Info, Menu, Plus, Search } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Bell, Menu, Plus, Search } from 'lucide-react'
 
 import { useAuth } from '@/auth/AuthContext'
 import { Sidebar } from '@/components/layout/Sidebar'
+import { useTransactionComposer } from '@/components/transactions/TransactionComposer'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
-import { Modal } from '@/components/ui/Modal'
-import { Select } from '@/components/ui/Select'
 import { useLockBodyScroll } from '@/hooks/useLockBodyScroll'
-import { cn } from '@/lib/cn'
 import { initialsOf } from '@/lib/user'
 
 import { navigation } from './navigation'
@@ -17,9 +15,11 @@ import { navigation } from './navigation'
 /** Sticky application header with search, actions and the mobile drawer trigger. */
 export function Topbar() {
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [composerOpen, setComposerOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const location = useLocation()
+  const navigate = useNavigate()
   const { user } = useAuth()
+  const composer = useTransactionComposer()
 
   useLockBodyScroll(drawerOpen)
 
@@ -41,6 +41,13 @@ export function Topbar() {
     item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to),
   )
 
+  /** The header search hands the term over to the transaction list. */
+  function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const term = search.trim()
+    navigate(term ? `/transactions?search=${encodeURIComponent(term)}` : '/transactions')
+  }
+
   return (
     <>
       <header className="glass-panel sticky top-0 z-20 border-b border-line">
@@ -60,7 +67,11 @@ export function Topbar() {
             <p className="truncate text-xs text-ink-faint">{activeItem?.description}</p>
           </div>
 
-          <div className="relative ml-auto hidden w-full max-w-xs md:block lg:ml-auto">
+          <form
+            className="relative ml-auto hidden w-full max-w-xs md:block lg:ml-auto"
+            onSubmit={handleSearch}
+            role="search"
+          >
             <label htmlFor="global-search" className="sr-only">
               Search transactions
             </label>
@@ -69,9 +80,11 @@ export function Topbar() {
               type="search"
               placeholder="Search transactions…"
               className="h-9 pl-9"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
               icon={<Search className="size-4" aria-hidden="true" />}
             />
-          </div>
+          </form>
 
           <div className="ml-auto flex items-center gap-1.5 md:ml-0">
             <Button
@@ -79,6 +92,7 @@ export function Topbar() {
               size="icon"
               className="md:hidden"
               aria-label="Search"
+              onClick={() => navigate('/transactions')}
               icon={<Search className="size-4" aria-hidden="true" />}
             />
 
@@ -100,7 +114,7 @@ export function Topbar() {
               size="sm"
               className="ml-1"
               icon={<Plus className="size-4" aria-hidden="true" />}
-              onClick={() => setComposerOpen(true)}
+              onClick={() => composer.open()}
             >
               <span className="hidden sm:inline">New transaction</span>
               <span className="sm:hidden">New</span>
@@ -118,7 +132,6 @@ export function Topbar() {
       </header>
 
       <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
-      <TransactionComposer open={composerOpen} onClose={() => setComposerOpen(false)} />
     </>
   )
 }
@@ -147,98 +160,5 @@ function MobileDrawer({ open, onClose }: MobileDrawerProps) {
         <Sidebar variant="drawer" onNavigate={onClose} />
       </div>
     </div>
-  )
-}
-
-interface TransactionComposerProps {
-  open: boolean
-  onClose: () => void
-}
-
-const categoryOptions = [
-  { value: 'food', label: 'Food & Dining' },
-  { value: 'shopping', label: 'Shopping' },
-  { value: 'transport', label: 'Transport' },
-  { value: 'utilities', label: 'Utilities' },
-  { value: 'housing', label: 'Housing' },
-  { value: 'health', label: 'Health' },
-  { value: 'entertainment', label: 'Entertainment' },
-  { value: 'subscriptions', label: 'Subscriptions' },
-]
-
-/**
- * Placeholder composer. The form is intentionally inert — the sample data
- * source is read-only, so the modal explains that nothing is persisted yet.
- */
-function TransactionComposer({ open, onClose }: TransactionComposerProps) {
-  const [submitted, setSubmitted] = useState(false)
-
-  useEffect(() => {
-    if (!open) setSubmitted(false)
-  }, [open])
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="New transaction"
-      description="Capture a spend and categorise it."
-      footer={
-        submitted ? (
-          <Button variant="secondary" onClick={onClose}>
-            Close
-          </Button>
-        ) : (
-          <>
-            <Button variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button variant="primary" type="submit" form="transaction-form">
-              Save transaction
-            </Button>
-          </>
-        )
-      }
-    >
-      {submitted ? (
-        <div
-          role="status"
-          className={cn(
-            'flex gap-3 rounded-control border border-info/25 bg-info/10 p-3.5 text-sm text-info',
-          )}
-        >
-          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <p className="leading-relaxed">
-            This preview build reads from sample data only — nothing was saved. Once the API is
-            connected this form will post a real transaction.
-          </p>
-        </div>
-      ) : (
-        <form
-          id="transaction-form"
-          className="grid gap-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            setSubmitted(true)
-          }}
-        >
-          <Input label="Merchant" placeholder="e.g. Blue Bottle Coffee" required />
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Input
-              label="Amount"
-              type="number"
-              inputMode="decimal"
-              placeholder="0.00"
-              min="0"
-              step="0.01"
-              required
-            />
-            <Select label="Category" options={categoryOptions} placeholder="Choose a category" required />
-          </div>
-          <Input label="Date" type="date" required />
-          <Input label="Note" placeholder="Optional" />
-        </form>
-      )}
-    </Modal>
   )
 }

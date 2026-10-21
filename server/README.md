@@ -18,6 +18,19 @@ npm test                 # node --test against an in-memory MongoDB
 npm run seed:categories  # (re)seed the category taxonomy
 ```
 
+## Running the client against this API
+
+```bash
+npm run seed             # seed the category taxonomy
+npm run dev              # the API on http://localhost:4000
+```
+
+Then set `VITE_DATA_SOURCE=api` in `client/.env.local` and start the client — the full
+walkthrough is in the [repository README](../README.md).
+
+Transactions and budgets that were created before authentication existed carry no owner
+and are not reachable through the API; clear them before switching the client over.
+
 ## Configuration
 
 Copy `.env.example` to `.env`. Every value has a safe default, but `MONGODB_URI` is
@@ -72,6 +85,25 @@ envelope. The shape is identical for every route.
 ```jsonc
 { "page": 1, "limit": 20, "total": 137, "totalPages": 7, "hasNextPage": true, "hasPreviousPage": false }
 ```
+
+### Field-level errors
+
+A `422` describes every problem with the request, one entry per field:
+
+```jsonc
+{
+  "success": false,
+  "error": {
+    "status": 422,
+    "code": "VALIDATION_ERROR",
+    "message": "Request validation failed.",
+    "details": [{ "field": "amount", "message": "Amount must be greater than 0." }]
+  }
+}
+```
+
+The web client maps these entries back onto the matching form inputs, so a rejected
+submission points at the field that caused it instead of showing one generic message.
 
 ## Endpoints
 

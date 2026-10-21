@@ -83,6 +83,23 @@ npm run start:server # run the compiled API (after npm run build)
 npm run seed         # seed the category taxonomy
 ```
 
+### Running against the real API
+
+The client ships with a sample-data preview build. To use the real thing:
+
+```bash
+cp server/.env.example server/.env      # add your MONGODB_URI
+cp client/.env.example client/.env.local # set VITE_DATA_SOURCE=api
+npm run seed                            # seed the category taxonomy
+npm run dev:server &                    # the API on :4000
+npm run dev                             # the client on :5173
+```
+
+The app then requires an account: an anonymous visitor is sent to the sign-in screen,
+and the session lives in an HTTP-only cookie. Transactions and budgets that were created
+before authentication existed have no owner and are not reachable through the API —
+clear them before switching over.
+
 ## How data flows
 
 The UI never talks to a data source directly — it depends on the `SpendlyApi` interface
@@ -107,6 +124,30 @@ components ─▶ useAsyncData ─▶ services/index.ts ─┬─▶ services/mo
 
 The server is the source of truth for the live path; the mock layer exists so the
 frontend stays usable without a database.
+
+## Working with transactions
+
+The dashboard and the transactions page read the same ledger, and both can change it.
+
+* **One dialog for create and edit.** `useTransactionComposer()` opens the same
+  `TransactionForm` from the top bar, the dashboard and the transactions list, so the
+  fields, the validation and the error handling are identical everywhere.
+* **One HTTP client.** `client/src/services/http.ts` is the only place that talks to the
+  network. It sends the session cookie, repeats the CSRF token on every write, retries
+  once with a fresh token when the server rejects the old one, and turns a failure into
+  an `ApiError` that carries the field-level issues a `422` reports — those land on the
+  matching inputs instead of disappearing into a toast.
+* **Guarded submissions.** The form refuses to send an empty amount or a missing
+  category, and a second submit while a request is in flight is ignored.
+* **Immediate updates.** A successful mutation raises a data revision that every
+  `useAsyncData` hook depends on, so the list, the dashboard totals and the charts all
+  refresh without a page reload. Nothing is written to `localStorage`.
+* **Filters live in the URL.** `?search=`, `?category=`, `?type=` and `?range=` describe
+  the current view, so it can be shared, bookmarked and reloaded. The search box is
+  debounced before it reaches the API.
+* **Honest feedback.** Loading uses skeletons, an empty list explains what would appear
+  there, a failed request renders an error state with a retry, and a failed request never
+  falls back to sample data.
 
 ## Accounts and sessions
 

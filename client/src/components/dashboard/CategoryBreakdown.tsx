@@ -1,5 +1,6 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 
+import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/cn'
 import { formatCurrency, formatPercent } from '@/lib/format'
@@ -8,11 +9,21 @@ import type { CategorySpend } from '@/types'
 export interface CategoryBreakdownProps {
   data: CategorySpend[]
   loading?: boolean
+  /** Shown instead of the chart when the request failed. */
+  error?: Error
+  /** Called when the user asks to try again. */
+  onRetry?: () => void
   className?: string
 }
 
 /** Donut chart of spend per category with a ranked legend. */
-export function CategoryBreakdown({ data, loading, className }: CategoryBreakdownProps) {
+export function CategoryBreakdown({
+  data,
+  loading,
+  error,
+  onRetry,
+  className,
+}: CategoryBreakdownProps) {
   const total = data.reduce((sum, entry) => sum + entry.amount, 0)
 
   return (
@@ -26,6 +37,13 @@ export function CategoryBreakdown({ data, loading, className }: CategoryBreakdow
             ))}
           </div>
         </div>
+      ) : error ? (
+        <ErrorState
+          title="Could not load the breakdown"
+          description={error.message}
+          onRetry={onRetry}
+          className="px-0 py-8"
+        />
       ) : data.length === 0 ? (
         <p className="py-10 text-center text-sm text-ink-faint">No spending in this window.</p>
       ) : (

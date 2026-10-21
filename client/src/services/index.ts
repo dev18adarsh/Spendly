@@ -6,7 +6,13 @@ import { mockApi } from './mock/client'
 import type { AuthApi, SpendlyApi } from './types'
 
 export { configureMockApi } from './mock/client'
-export { ApiError, createHttpAuthClient, createHttpClient, SESSION_EXPIRED_EVENT } from './http'
+export {
+  ApiError,
+  createHttpAuthClient,
+  createHttpClient,
+  SESSION_EXPIRED_EVENT,
+} from './http'
+export type { ApiFieldIssue } from './http'
 export { DEMO_USER } from './mock/auth'
 export type * from './types'
 

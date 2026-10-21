@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { AlertTriangle, Info, Plus, PiggyBank, Wallet } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { AlertCircle, AlertTriangle, Loader2, Plus, PiggyBank, Wallet } from 'lucide-react'
 
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/Badge'
@@ -12,10 +12,13 @@ import { Modal } from '@/components/ui/Modal'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { Select } from '@/components/ui/Select'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { useToast } from '@/components/ui/Toast'
 import { useAsyncData } from '@/hooks/useAsyncData'
+import { useCategories } from '@/hooks/useCategories'
+import { notifyDataChanged } from '@/hooks/useDataRevision'
 import { cn } from '@/lib/cn'
 import { formatCurrency, formatPercent } from '@/lib/format'
-import { api } from '@/services'
+import { api, ApiError } from '@/services'
 
 export function BudgetsPage() {
   const [composerOpen, setComposerOpen] = useState(false)
@@ -219,86 +222,143 @@ function SummaryTile({ label, value, loading, icon: Icon, tone }: SummaryTilePro
   )
 }
 
-const budgetCategoryOptions = [
-  { value: 'food', label: 'Food & Dining' },
-  { value: 'shopping', label: 'Shopping' },
-  { value: 'transport', label: 'Transport' },
-  { value: 'utilities', label: 'Utilities' },
-  { value: 'housing', label: 'Housing' },
-  { value: 'health', label: 'Health' },
-  { value: 'entertainment', label: 'Entertainment' },
-  { value: 'subscriptions', label: 'Subscriptions' },
-]
+interface BudgetComposerProps {
+  open: boolean
+  onClose: () => void
+}
 
-/** Placeholder composer — budgets are read-only until the API is connected. */
-function BudgetComposer({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [submitted, setSubmitted] = useState(false)
+/**
+ * Creates a monthly budget.
+ *
+ * The API owns the month and the year, so the form only asks for a category
+ * and a ceiling. Submitting twice is impossible — the button is disabled
+ * while the request is in flight.
+ */
+function BudgetComposer({ open, onClose }: BudgetComposerProps) {
+  const categories = useCategories()
+  const toast = useToast()
+
+  const [categoryId, setCategoryId] = useState('')
+  const [limit, setLimit] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [limitError, setLimitError] = useState<string | undefined>()
+  const [submitting, setSubmitting] = useState(false)
+
+  // Reset the form every time the dialog opens.
+  useEffect(() => {
+    if (!open) return
+    setCategoryId('')
+    setLimit('')
+    setError(null)
+    setLimitError(undefined)
+    setSubmitting(false)
+  }, [open])
+
+  const categoryOptions = useMemo(
+    () =>
+      categories.categories
+        .filter((category) => category.id !== 'income')
+        .map((category) => ({ value: category.id, label: category.name })),
+    [categories.categories],
+  )
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (submitting) return
+
+    setError(null)
+
+    if (!categoryId) {
+      setError('Choose a category.')
+      return
+    }
+
+    const amount = Number(limit.trim().replace(',', '.'))
+    if (!limit.trim() || !Number.isFinite(amount) || amount < 0) {
+      setLimitError('Enter a limit of 0 or more.')
+      return
+    }
+    setLimitError(undefined)
+
+    setSubmitting(true)
+
+    try {
+      const created = await api.createBudget({ categoryId, limit: amount })
+
+      notifyDataChanged()
+      toast.success('Budget saved', `${created.name} · ${formatCurrency(created.limit)} per month`)
+      onClose()
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError
+          ? caught.message
+          : 'Something went wrong while saving the budget. Please try again.',
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   return (
     <Modal
       open={open}
-      onClose={() => {
-        setSubmitted(false)
-        onClose()
-      }}
+      onClose={onClose}
       title="New budget"
       description="Set a monthly ceiling for a category."
       footer={
-        submitted ? (
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setSubmitted(false)
-              onClose()
-            }}
-          >
-            Close
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={submitting}>
+            Cancel
           </Button>
-        ) : (
-          <>
-            <Button variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button variant="primary" type="submit" form="budget-form">
-              Create budget
-            </Button>
-          </>
-        )
+          <Button
+            variant="primary"
+            type="submit"
+            form="budget-form"
+            disabled={submitting}
+            icon={
+              submitting ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : undefined
+            }
+          >
+            {submitting ? 'Saving…' : 'Create budget'}
+          </Button>
+        </>
       }
     >
-      {submitted ? (
-        <div className="flex gap-3 rounded-control border border-info/25 bg-info/10 p-3.5 text-sm text-info">
-          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <p className="leading-relaxed">
-            Budgets are not saved yet — this preview build reads from sample data only.
-          </p>
-        </div>
-      ) : (
-        <form
-          id="budget-form"
-          className="grid gap-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            setSubmitted(true)
-          }}
-        >
-          <Select
-            label="Category"
-            options={budgetCategoryOptions}
-            placeholder="Choose a category"
-            required
-          />
-          <Input
-            label="Monthly limit"
-            type="number"
-            inputMode="decimal"
-            placeholder="0.00"
-            min="0"
-            step="1"
-            required
-          />
-        </form>
-      )}
+      <form id="budget-form" className="grid gap-4" onSubmit={handleSubmit} noValidate>
+        <Select
+          label="Category"
+          options={categoryOptions}
+          value={categoryId}
+          onChange={(event) => setCategoryId(event.target.value)}
+          placeholder={categories.isLoading ? 'Loading categories…' : 'Choose a category'}
+          disabled={categories.isLoading || categories.isError}
+          required
+        />
+
+        <Input
+          label="Monthly limit"
+          type="text"
+          inputMode="decimal"
+          placeholder="0.00"
+          value={limit}
+          onChange={(event) => setLimit(event.target.value)}
+          error={limitError}
+          autoComplete="off"
+          required
+        />
+
+        {error ? (
+          <div
+            role="alert"
+            className="flex gap-3 rounded-control border border-negative/25 bg-negative/10 p-3.5 text-sm text-negative"
+          >
+            <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <p className="leading-relaxed">{error}</p>
+          </div>
+        ) : null}
+      </form>
     </Modal>
   )
 }

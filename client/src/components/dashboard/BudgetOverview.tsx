@@ -1,5 +1,6 @@
 import { AlertCircle } from 'lucide-react'
 
+import { ErrorState } from '@/components/ui/ErrorState'
 import { ProgressBar } from '@/components/ui/ProgressBar'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/cn'
@@ -9,13 +10,24 @@ import type { Budget } from '@/types'
 export interface BudgetOverviewProps {
   budgets: Budget[]
   loading?: boolean
+  /** Shown instead of the list when the request failed. */
+  error?: Error
+  /** Called when the user asks to try again. */
+  onRetry?: () => void
   /** How many budgets to display. */
   limit?: number
   className?: string
 }
 
 /** Compact list of the most relevant monthly budgets. */
-export function BudgetOverview({ budgets, loading, limit = 5, className }: BudgetOverviewProps) {
+export function BudgetOverview({
+  budgets,
+  loading,
+  error,
+  onRetry,
+  limit = 5,
+  className,
+}: BudgetOverviewProps) {
   const visible = budgets.slice(0, limit)
 
   return (
@@ -27,6 +39,13 @@ export function BudgetOverview({ budgets, loading, limit = 5, className }: Budge
             <Skeleton className="h-2 w-full rounded-full" />
           </div>
         ))
+      ) : error ? (
+        <ErrorState
+          title="Could not load budgets"
+          description={error.message}
+          onRetry={onRetry}
+          className="px-0 py-8"
+        />
       ) : (
         visible.map((budget) => {
           const ratio = budget.limit > 0 ? budget.spent / budget.limit : 0

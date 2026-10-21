@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { ArrowDownLeft, ArrowUpRight, Clock } from 'lucide-react'
 
 import { CategoryAvatar } from '@/components/ui/CategoryAvatar'
@@ -13,6 +14,8 @@ export interface TransactionRowProps {
   categoryColor?: string
   /** Rendered instead of the relative timestamp. */
   showDate?: boolean
+  /** Row actions, such as edit and delete buttons. */
+  actions?: ReactNode
 }
 
 export function TransactionRow({
@@ -20,6 +23,7 @@ export function TransactionRow({
   categoryIcon = 'Wallet',
   categoryColor = '#98a2ae',
   showDate = false,
+  actions,
 }: TransactionRowProps) {
   const isIncome = transaction.type === 'income'
 
@@ -74,6 +78,17 @@ export function TransactionRow({
           )}
         </span>
       </div>
+
+      {actions ? (
+        <div
+          className={cn(
+            'flex shrink-0 items-center gap-1 transition-opacity duration-200',
+            'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100',
+          )}
+        >
+          {actions}
+        </div>
+      ) : null}
     </li>
   )
 }

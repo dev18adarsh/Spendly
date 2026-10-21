@@ -2,6 +2,7 @@ import { Receipt } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 import { TransactionRow } from '@/components/dashboard/TransactionRow'
+import { TransactionRowActions } from '@/components/transactions/TransactionRowActions'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -15,6 +16,10 @@ export interface RecentTransactionsProps {
   loading?: boolean
   error?: Error
   onRetry?: () => void
+  /** Opens a transaction in the editor. */
+  onEdit?: (transaction: Transaction) => void
+  /** Opens the delete confirmation. */
+  onDelete?: (transaction: Transaction) => void
 }
 
 export function RecentTransactions({
@@ -23,8 +28,11 @@ export function RecentTransactions({
   loading,
   error,
   onRetry,
+  onEdit,
+  onDelete,
 }: RecentTransactionsProps) {
   const latest = transactions[0]
+  const showActions = Boolean(onEdit && onDelete)
 
   return (
     <Card flush>
@@ -55,7 +63,7 @@ export function RecentTransactions({
         <EmptyState
           icon={<Receipt className="size-5" aria-hidden="true" />}
           title="No transactions yet"
-          description="Once you connect an account, your latest activity will appear here."
+          description="Add your first transaction and it will show up here."
         />
       ) : (
         <ul className="divide-y divide-line">
@@ -67,6 +75,15 @@ export function RecentTransactions({
                 transaction={transaction}
                 categoryIcon={category?.icon}
                 categoryColor={category?.color}
+                actions={
+                  showActions ? (
+                    <TransactionRowActions
+                      transaction={transaction}
+                      onEdit={onEdit!}
+                      onDelete={onDelete!}
+                    />
+                  ) : undefined
+                }
               />
             )
           })}

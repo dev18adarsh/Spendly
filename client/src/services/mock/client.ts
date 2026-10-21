@@ -4,24 +4,44 @@ import {
   buildSeries,
   buildSummary,
   buildTopMerchants,
+  mockBudgetLimits,
   mockCategories,
   mockTransactions,
   rangeDays,
 } from '@/data/mock'
-import type { SpendlyApi, TransactionQuery } from '@/services/types'
+import type {
+  BudgetDraft,
+  SpendlyApi,
+  TransactionDraft,
+  TransactionDraftUpdate,
+  TransactionQuery,
+} from '@/services/types'
+import type { Transaction } from '@/types'
 
 /**
  * Mock implementation of the Spendly API.
  *
  * It mimics the latency and failure modes of a real network so the UI's
  * loading and error states can be exercised before the server exists.
- * Nothing here writes or persists anything.
+ * Writes are kept in memory for the lifetime of the tab, so the demo build
+ * behaves like the real one without needing a server.
  */
 
 const MIN_LATENCY_MS = 280
 const MAX_LATENCY_MS = 720
 
 let shouldFail = false
+
+/**
+ * The in-memory ledger.
+ *
+ * It starts as a copy of the sample data and is mutated by the write
+ * methods, so every view keeps talking to the same set of transactions.
+ */
+let ledger: Transaction[] = mockTransactions.map((transaction) => ({ ...transaction }))
+
+/** The monthly budgets the demo build keeps in memory. */
+let budgetLimits = mockBudgetLimits.map((budget) => ({ ...budget }))
 
 /** Toggle simulated failures from the Settings screen. */
 export function configureMockApi(options: { failWithError?: boolean }): void {
@@ -61,10 +81,10 @@ async function respond<T>(value: T, signal?: AbortSignal): Promise<T> {
   return value
 }
 
-function applyQuery(query: TransactionQuery = {}): typeof mockTransactions {
+function applyQuery(query: TransactionQuery = {}): Transaction[] {
   const { search, categoryId, type, range = '30d', limit } = query
 
-  let result = mockTransactions
+  let result = ledger
 
   if (range !== '12m') {
     const cutoff = Date.now() - rangeDays[range] * 24 * 60 * 60 * 1000
@@ -94,26 +114,150 @@ function applyQuery(query: TransactionQuery = {}): typeof mockTransactions {
   return typeof limit === 'number' ? result.slice(0, limit) : result
 }
 
+/** Builds a client transaction from a draft, mirroring the API's mapping. */
+function fromDraft(draft: TransactionDraft, id: string): Transaction {
+  const category = mockCategories.find((item) => item.id === draft.categoryId)
+
+  const transaction: Transaction = {
+    id,
+    merchant: draft.merchant.trim(),
+    categoryId: draft.categoryId,
+    categoryName: category?.name ?? draft.categoryId,
+    amount: draft.amount,
+    type: draft.type,
+    date: draft.date,
+    status: draft.status,
+    method: draft.method,
+  }
+
+  if (draft.note?.trim()) transaction.note = draft.note.trim()
+  return transaction
+}
+
 export const mockApi: SpendlyApi = {
   getSummary(range, signal) {
-    return respond(buildSummary(range), signal)
+    return respond(buildSummary(range, new Date(), ledger), signal)
   },
   getCashflow(range, signal) {
-    return respond(buildSeries(range), signal)
+    return respond(buildSeries(range, new Date(), ledger), signal)
   },
   getCategoryBreakdown(range, signal) {
-    return respond(buildCategoryBreakdown(range), signal)
+    return respond(buildCategoryBreakdown(range, new Date(), ledger), signal)
   },
   getTransactions(query, signal) {
     return respond(applyQuery(query), signal)
   },
   getBudgets(signal) {
-    return respond(buildBudgets(), signal)
+    return respond(buildBudgets(new Date(), ledger, budgetLimits), signal)
   },
   getCategories(signal) {
     return respond(mockCategories, signal)
   },
   getTopMerchants(range, limit, signal) {
-    return respond(buildTopMerchants(range, limit), signal)
+    return respond(buildTopMerchants(range, limit, new Date(), ledger), signal)
+  },
+
+  async createTransaction(draft) {
+    const id = `txn_${String(ledger.length + 1).padStart(4, '0')}`
+    const transaction = fromDraft(draft, id)
+
+    await delay(randomLatency())
+    if (shouldFail) {
+      throw new Error('Unable to reach the Spendly API. Check your connection and try again.')
+    }
+
+    ledger = [transaction, ...ledger]
+    return transaction
+  },
+
+  async updateTransaction(id, draft: TransactionDraftUpdate) {
+    const index = ledger.findIndex((transaction) => transaction.id === id)
+
+    await delay(randomLatency())
+    if (shouldFail) {
+      throw new Error('Unable to reach the Spendly API. Check your connection and try again.')
+    }
+
+    if (index === -1) {
+      throw new Error(`No transaction found with id "${id}".`)
+    }
+
+    const existing = ledger[index]
+    if (!existing) throw new Error(`No transaction found with id "${id}".`)
+
+    const updated: Transaction = {
+      ...existing,
+      ...(draft.amount !== undefined ? { amount: draft.amount } : {}),
+      ...(draft.type !== undefined ? { type: draft.type } : {}),
+      ...(draft.categoryId !== undefined
+        ? {
+            categoryId: draft.categoryId,
+            categoryName:
+              mockCategories.find((item) => item.id === draft.categoryId)?.name ?? draft.categoryId,
+          }
+        : {}),
+      ...(draft.merchant !== undefined ? { merchant: draft.merchant.trim() } : {}),
+      ...(draft.date !== undefined ? { date: draft.date } : {}),
+      ...(draft.method !== undefined ? { method: draft.method } : {}),
+      ...(draft.status !== undefined ? { status: draft.status } : {}),
+    }
+
+    if (draft.note !== undefined) {
+      if (draft.note.trim()) updated.note = draft.note.trim()
+      else delete updated.note
+    }
+
+    ledger = ledger.map((transaction, position) => (position === index ? updated : transaction))
+    return updated
+  },
+
+  async deleteTransaction(id) {
+    await delay(randomLatency())
+    if (shouldFail) {
+      throw new Error('Unable to reach the Spendly API. Check your connection and try again.')
+    }
+
+    if (!ledger.some((transaction) => transaction.id === id)) {
+      throw new Error(`No transaction found with id "${id}".`)
+    }
+
+    ledger = ledger.filter((transaction) => transaction.id !== id)
+  },
+
+  async createBudget(draft: BudgetDraft) {
+    await delay(randomLatency())
+    if (shouldFail) {
+      throw new Error('Unable to reach the Spendly API. Check your connection and try again.')
+    }
+
+    const category = mockCategories.find((item) => item.id === draft.categoryId)
+    if (!category) {
+      throw new Error('category is not a known category')
+    }
+
+    const existing = budgetLimits.find((budget) => budget.categoryId === draft.categoryId)
+    if (existing) {
+      existing.limit = draft.limit
+    } else {
+      budgetLimits = [
+        ...budgetLimits,
+        {
+          categoryId: draft.categoryId,
+          name: category.name,
+          limit: draft.limit,
+          color: category.color,
+        },
+      ]
+    }
+
+    const created = buildBudgets(new Date(), ledger, budgetLimits).find(
+      (budget) => budget.categoryId === draft.categoryId,
+    )
+
+    if (!created) {
+      throw new Error('The budget could not be created.')
+    }
+
+    return created
   },
 }

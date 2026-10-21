@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type DependencyList } from 'react'
 
+import { useDataRevision } from './useDataRevision'
+
 export type AsyncStatus = 'loading' | 'success' | 'error'
 
 export interface AsyncResult<T> {
@@ -28,15 +30,19 @@ interface AsyncState<T> {
  * @param fetcher  Async task to run.
  * @param deps     Dependency list — must keep a stable length across renders.
  * @param options  `enabled: false` keeps the task dormant.
+ *                 `refreshOnChange: false` opts the task out of the global
+ *                 invalidation that follows a mutation — useful for reference
+ *                 data that never changes.
  */
 export function useAsyncData<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   deps: DependencyList,
-  options: { enabled?: boolean } = {},
+  options: { enabled?: boolean; refreshOnChange?: boolean } = {},
 ): AsyncResult<T> {
-  const { enabled = true } = options
+  const { enabled = true, refreshOnChange = true } = options
   const [state, setState] = useState<AsyncState<T>>({ status: 'loading' })
   const [reloadToken, setReloadToken] = useState(0)
+  const revision = useDataRevision()
 
   // Keep the latest fetcher without making it part of the effect dependencies.
   const fetcherRef = useRef(fetcher)
@@ -70,7 +76,7 @@ export function useAsyncData<T>(
       controller.abort()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, reloadToken, enabled])
+  }, [...deps, reloadToken, enabled, refreshOnChange ? revision : 0])
 
   const refetch = useCallback(() => setReloadToken((token) => token + 1), [])
 

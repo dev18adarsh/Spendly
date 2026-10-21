@@ -4,8 +4,10 @@ import type {
   CashflowPoint,
   Category,
   CategorySpend,
+  PaymentMethod,
   SummaryMetrics,
   Transaction,
+  TransactionStatus,
   TransactionType,
 } from '@/types'
 
@@ -34,6 +36,43 @@ export interface TransactionQuery {
 }
 
 /**
+ * A transaction the user is about to save.
+ *
+ * The shape is transport-agnostic on purpose: the HTTP client maps it onto
+ * the API's payload and the mock client stores it as-is, so a form never has
+ * to know which data source it is talking to.
+ */
+export interface TransactionDraft {
+  /** Always positive — `type` carries the direction. */
+  amount: number
+  type: TransactionType
+  /** Category slug, e.g. `food`. */
+  categoryId: string
+  /** Headline of the entry. Required by the API. */
+  merchant: string
+  note?: string
+  /** ISO-8601 timestamp. */
+  date: string
+  method: PaymentMethod
+  status: TransactionStatus
+}
+
+/** A partial update — only the fields that actually changed are sent. */
+export type TransactionDraftUpdate = Partial<TransactionDraft>
+
+/** A monthly budget the user wants to save. */
+export interface BudgetDraft {
+  /** Category slug, e.g. `food`. */
+  categoryId: string
+  /** Monthly ceiling. Must not be negative. */
+  limit: number
+  /** 1–12. Defaults to the current month when the API is asked. */
+  month?: number
+  /** Four digit year. Defaults to the current year when the API is asked. */
+  year?: number
+}
+
+/**
  * The single interface the UI talks to.
  * `services/mock` implements it against sample data today; the HTTP client
  * implements it against the Express API once it exposes real routes.
@@ -49,6 +88,16 @@ export interface SpendlyApi {
   getBudgets(signal?: AbortSignal): Promise<Budget[]>
   getCategories(signal?: AbortSignal): Promise<Category[]>
   getTopMerchants(range: DateRangeKey, limit?: number, signal?: AbortSignal): Promise<MerchantSpend[]>
+
+  /** Creates a transaction and returns the saved record. */
+  createTransaction(draft: TransactionDraft): Promise<Transaction>
+  /** Updates a transaction and returns the saved record. */
+  updateTransaction(id: string, draft: TransactionDraftUpdate): Promise<Transaction>
+  /** Removes a transaction. Resolves once the record is gone. */
+  deleteTransaction(id: string): Promise<void>
+
+  /** Creates a monthly budget for a category. */
+  createBudget(draft: BudgetDraft): Promise<Budget>
 }
 
 export type { Budget, CashflowPoint, Category, CategorySpend, SummaryMetrics, Transaction }

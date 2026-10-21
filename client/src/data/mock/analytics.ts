@@ -44,10 +44,14 @@ function monthLabel(date: Date): string {
 /* ------------------------------------------------------------------ */
 
 /** All ledger entries that fall inside the requested window. */
-export function transactionsInRange(range: DateRangeKey, now: Date = new Date()): Transaction[] {
-  if (range === '12m') return mockTransactions
+export function transactionsInRange(
+  range: DateRangeKey,
+  now: Date = new Date(),
+  ledger: Transaction[] = mockTransactions,
+): Transaction[] {
+  if (range === '12m') return ledger
   const cutoff = now.getTime() - rangeDays[range] * DAY_MS
-  return mockTransactions.filter((transaction) => new Date(transaction.date).getTime() >= cutoff)
+  return ledger.filter((transaction) => new Date(transaction.date).getTime() >= cutoff)
 }
 
 function sumBy(transactions: Transaction[], type: Transaction['type']): number {
@@ -68,15 +72,24 @@ function sumBy(transactions: Transaction[], type: Transaction['type']): number {
  * - 12M      → monthly buckets (recent months aggregated from the ledger,
  *              older months taken from the historical sample totals)
  */
-export function buildSeries(range: DateRangeKey, now: Date = new Date()): CashflowPoint[] {
-  if (range === '12m') return buildMonthlySeries(now)
-  if (range === '90d') return buildBuckets(rangeDays[range], 7, now)
-  return buildBuckets(rangeDays[range], 1, now)
+export function buildSeries(
+  range: DateRangeKey,
+  now: Date = new Date(),
+  ledger: Transaction[] = mockTransactions,
+): CashflowPoint[] {
+  if (range === '12m') return buildMonthlySeries(now, ledger)
+  if (range === '90d') return buildBuckets(rangeDays[range], 7, now, ledger)
+  return buildBuckets(rangeDays[range], 1, now, ledger)
 }
 
 /** Buckets of `size` days covering the last `totalDays` days, oldest first. */
-function buildBuckets(totalDays: number, size: number, now: Date): CashflowPoint[] {
-  const transactions = transactionsInRange(size === 1 ? '30d' : '90d', now).filter(
+function buildBuckets(
+  totalDays: number,
+  size: number,
+  now: Date,
+  ledger: Transaction[],
+): CashflowPoint[] {
+  const transactions = transactionsInRange(size === 1 ? '30d' : '90d', now, ledger).filter(
     (transaction) =>
       new Date(transaction.date).getTime() >= now.getTime() - totalDays * DAY_MS,
   )
@@ -113,7 +126,7 @@ function labelFor(date: Date, size: number): string {
 }
 
 /** Twelve calendar months, oldest first, combining ledger and historical totals. */
-function buildMonthlySeries(now: Date): CashflowPoint[] {
+function buildMonthlySeries(now: Date, ledger: Transaction[] = mockTransactions): CashflowPoint[] {
   const months: Array<{ key: string; label: string; income: number; expenses: number }> = []
 
   for (let offset = 11; offset >= 0; offset -= 1) {
@@ -122,7 +135,7 @@ function buildMonthlySeries(now: Date): CashflowPoint[] {
   }
 
   // Recent months come from the ledger so chart, cards and transactions agree.
-  for (const transaction of mockTransactions) {
+  for (const transaction of ledger) {
     const date = new Date(transaction.date)
     const bucket = months.find((month) => month.key === monthKey(date))
     if (!bucket) continue
@@ -153,8 +166,12 @@ function buildMonthlySeries(now: Date): CashflowPoint[] {
  * For the 12-month window the ledger only covers the recent months, so the
  * per-category amounts are scaled to match the annual total.
  */
-export function buildCategoryBreakdown(range: DateRangeKey, now: Date = new Date()): CategorySpend[] {
-  const transactions = transactionsInRange(range, now).filter(
+export function buildCategoryBreakdown(
+  range: DateRangeKey,
+  now: Date = new Date(),
+  ledger: Transaction[] = mockTransactions,
+): CategorySpend[] {
+  const transactions = transactionsInRange(range, now, ledger).filter(
     (transaction) => transaction.type === 'expense',
   )
   const totals = new Map<string, number>()
@@ -175,7 +192,10 @@ export function buildCategoryBreakdown(range: DateRangeKey, now: Date = new Date
   })
 
   if (range === '12m') {
-    const annualExpenses = buildMonthlySeries(now).reduce((total, month) => total + month.expenses, 0)
+    const annualExpenses = buildMonthlySeries(now, ledger).reduce(
+      (total, month) => total + month.expenses,
+      0,
+    )
     const ledgerTotal = entries.reduce((total, entry) => total + entry.amount, 0)
     if (ledgerTotal > 0 && annualExpenses > 0) {
       const factor = annualExpenses / ledgerTotal
@@ -199,8 +219,12 @@ function transactionLabel(categoryId: string): string {
 /* ------------------------------------------------------------------ */
 
 /** Headline metrics for the requested window. */
-export function buildSummary(range: DateRangeKey, now: Date = new Date()): SummaryMetrics {
-  const series = buildSeries(range, now)
+export function buildSummary(
+  range: DateRangeKey,
+  now: Date = new Date(),
+  ledger: Transaction[] = mockTransactions,
+): SummaryMetrics {
+  const series = buildSeries(range, now, ledger)
   const income = series.reduce((total, point) => total + point.income, 0)
   const expenses = series.reduce((total, point) => total + point.expenses, 0)
   const savingsRate = income > 0 ? ((income - expenses) / income) * 100 : 0
@@ -219,11 +243,15 @@ export function buildSummary(range: DateRangeKey, now: Date = new Date()): Summa
 /* ------------------------------------------------------------------ */
 
 /** Monthly budgets; `spent` is aggregated from the ledger's current month. */
-export function buildBudgets(now: Date = new Date()): Budget[] {
+export function buildBudgets(
+  now: Date = new Date(),
+  ledger: Transaction[] = mockTransactions,
+  limits: typeof mockBudgetLimits = mockBudgetLimits,
+): Budget[] {
   const currentMonth = monthKey(now)
   const spentByCategory = new Map<string, number>()
 
-  for (const transaction of mockTransactions) {
+  for (const transaction of ledger) {
     if (transaction.type !== 'expense') continue
     if (monthKey(new Date(transaction.date)) !== currentMonth) continue
     spentByCategory.set(
@@ -232,14 +260,14 @@ export function buildBudgets(now: Date = new Date()): Budget[] {
     )
   }
 
-  return mockBudgetLimits.map((limit) => ({
+  return limits.map((limit) => ({
     id: `budget_${limit.categoryId}`,
     categoryId: limit.categoryId,
     name: limit.name,
     limit: limit.limit,
     spent: spentByCategory.get(limit.categoryId) ?? 0,
     color: limit.color,
-    period: 'monthly',
+    period: 'monthly' as const,
   }))
 }
 
@@ -261,8 +289,9 @@ export function buildTopMerchants(
   range: DateRangeKey,
   limit = 6,
   now: Date = new Date(),
+  ledger: Transaction[] = mockTransactions,
 ): MerchantSpend[] {
-  const transactions = transactionsInRange(range, now).filter(
+  const transactions = transactionsInRange(range, now, ledger).filter(
     (transaction) => transaction.type === 'expense',
   )
   const totals = new Map<string, { name: string; amount: number; count: number; categoryId: string }>()
