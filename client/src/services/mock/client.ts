@@ -7,7 +7,7 @@ import {
   mockBudgetLimits,
   mockCategories,
   mockTransactions,
-  rangeDays,
+  transactionsInRange,
 } from '@/data/mock'
 import type {
   BudgetDraft,
@@ -84,12 +84,9 @@ async function respond<T>(value: T, signal?: AbortSignal): Promise<T> {
 function applyQuery(query: TransactionQuery = {}): Transaction[] {
   const { search, categoryId, type, range = '30d', limit } = query
 
-  let result = ledger
-
-  if (range !== '12m') {
-    const cutoff = Date.now() - rangeDays[range] * 24 * 60 * 60 * 1000
-    result = result.filter((transaction) => new Date(transaction.date).getTime() >= cutoff)
-  }
+  // The window is the very same one the analytics report on, so a list and
+  // the totals beside it always cover the same period.
+  let result = transactionsInRange(range, new Date(), ledger)
 
   if (categoryId && categoryId !== 'all') {
     result = result.filter((transaction) => transaction.categoryId === categoryId)
@@ -138,8 +135,8 @@ export const mockApi: SpendlyApi = {
   getSummary(range, signal) {
     return respond(buildSummary(range, new Date(), ledger), signal)
   },
-  getCashflow(range, signal) {
-    return respond(buildSeries(range, new Date(), ledger), signal)
+  getCashflow(range, interval, signal) {
+    return respond(buildSeries(range, interval, new Date(), ledger), signal)
   },
   getCategoryBreakdown(range, signal) {
     return respond(buildCategoryBreakdown(range, new Date(), ledger), signal)

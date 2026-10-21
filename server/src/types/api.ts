@@ -49,14 +49,37 @@ export interface CategoryDto {
   order: number
 }
 
+/** The reporting window a set of figures belongs to. */
+export interface ReportingPeriodDto {
+  /** The range key, e.g. `30d`. */
+  key: string
+  /** Inclusive start of the window, as an ISO-8601 timestamp. */
+  from: string
+  /** Exclusive end of the window, as an ISO-8601 timestamp. */
+  to: string
+  /** How many days the window covers. */
+  days: number
+  /** Human readable name, e.g. `Last 30 days`. */
+  label: string
+  /** The IANA zone the boundaries were calculated in. */
+  timeZone: string
+}
+
 /** Headline metrics for a reporting window. */
 export interface SummaryDto {
-  totalBalance: number
+  /** Net of the window: `income - expenses`. */
+  balance: number
+  /** Net of every transaction recorded before the window closed. */
+  allTimeBalance: number
   income: number
   expenses: number
   savingsRate: number
+  period: ReportingPeriodDto
   changes: {
+    /** Movement of the all-time balance against the balance before the window. */
     balance: MetricChangeDto
+    /** Movement of the window's own net against the previous window. */
+    net: MetricChangeDto
     income: MetricChangeDto
     expenses: MetricChangeDto
     savingsRate: MetricChangeDto
@@ -70,10 +93,16 @@ export interface MetricChangeDto {
 
 /** One point on the cashflow chart. */
 export interface CashflowPointDto {
+  /** Stable calendar key, e.g. `2026-03-08` or `2026-03`. */
   key: string
+  /** Compact axis label, e.g. `8`. */
   label: string
+  /** Long label used in tooltips, e.g. `Week of Mar 8, 2026`. */
+  fullLabel: string
   income: number
   expenses: number
+  /** Running balance at the end of the bucket. */
+  balance: number
 }
 
 /** Spend per category within a window. */

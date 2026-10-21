@@ -6,7 +6,8 @@ import {
   TRANSACTION_STATUSES,
   TRANSACTION_TYPES,
 } from '../constants/payment-methods.js'
-import { optionalDateSchema } from './common.js'
+import { RANGE_KEYS } from '../services/reporting-window.js'
+import { optionalDateSchema, timeZoneSchema } from './common.js'
 
 /** Body accepted by `POST /api/transactions`. */
 export const createTransactionSchema = z
@@ -52,6 +53,16 @@ export const listTransactionsQuerySchema = z
     from: optionalDateSchema,
     /** Inclusive upper bound on the transaction date. */
     to: optionalDateSchema,
+    /**
+     * A reporting window.
+     *
+     * When present it wins over `from`/`to` and resolves to exactly the same
+     * boundaries the analytics endpoints use, so a list and the totals
+     * beside it always cover the same period.
+     */
+    range: z.enum(RANGE_KEYS).optional(),
+    /** The IANA zone a reporting window is calculated in. */
+    tz: timeZoneSchema,
     type: z.enum(TRANSACTION_TYPES).optional(),
     category: z.enum(CATEGORY_SLUGS).optional(),
     /** Free-text match against description and merchant. */

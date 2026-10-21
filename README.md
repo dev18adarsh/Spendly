@@ -149,6 +149,53 @@ The dashboard and the transactions page read the same ledger, and both can chang
   there, a failed request renders an error state with a retry, and a failed request never
   falls back to sample data.
 
+## How the dashboard calculates
+
+Every figure the dashboard shows — the stat cards, both charts, the category donut and
+the recent list — is derived from **one reporting window**, resolved on the server.
+
+**The window.** `range` picks a window (`7d` · `30d` · `90d` · `12m` · `3y`) and `tz`
+picks the zone it is drawn in: the browser's IANA zone, validated server-side, falling
+back to `UTC`. Day-based windows open at **local midnight** `N-1` days ago and close at
+the moment of the request; month-based windows open on the **first of the month**
+`M-1` months ago. Every window is **half-open** — `[from, to)` — so a transaction can
+never be counted twice or slip through the gap between two windows.
+
+| Figure | Rule |
+| --- | --- |
+| Income | sum of `income` transactions with `from <= date < to` |
+| Expenses | sum of `expense` transactions in the same window |
+| Total balance | `income - expenses` **for the window** |
+| All-time balance | `income - expenses` of every transaction before `to`, window or not |
+| Savings rate | `balance / income * 100`, and `0` when there is no income |
+| Days in period | local **calendar** days covered, both ends included |
+
+Days are counted off the calendar rather than the clock, so `Last 30 days` always answers
+`30 days` even when the closing day is 23 or 25 hours long.
+
+**Movement.** Each figure is compared with the window immediately before it, which is
+shifted back by a **calendar step** — `N` whole days or `M` whole months — rather than by
+the same number of milliseconds, so the comparison window is itself a whole window and
+never begins in the middle of a day. `changes.net` compares the two windows' nets;
+`changes.balance` compares the all-time balance against what stood before the window
+opened.
+
+**Buckets.** The cashflow and trend charts group that same window into `day`, `week`,
+`month` or `year` buckets (`$dateTrunc` on the server). Weeks start on **Sunday**, and
+buckets are matched by calendar key rather than by instant, so a transaction always
+lands in the bucket whose label it carries. The chart, the donut and the cards are sums
+over the identical `[from, to)` interval — the chart totals and the card totals are the
+same numbers by construction, not by coincidence.
+
+**Timezone.** Boundaries and bucket edges are computed in the reported zone with
+wall-clock helpers that stay correct across DST transitions, and the client renders
+dates in that same zone — a transaction, the bucket it appears in and the totals it
+contributes to can never disagree.
+
+The window is resolved from the request's `range`, `interval` and `tz` query parameters,
+so the browser never sends a date range for the server to trust. An empty account
+reports `$0.00` everywhere; no figure is ever invented.
+
 ## Accounts and sessions
 
 Spendly signs people in with **cookie sessions** — no bearer token, no `Authorization`

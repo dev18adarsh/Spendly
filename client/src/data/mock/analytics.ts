@@ -2,41 +2,120 @@ import type {
   Budget,
   CashflowPoint,
   CategorySpend,
+  ReportingPeriod,
   SummaryMetrics,
   Transaction,
 } from '@/types'
 
-import type { DateRangeKey } from '@/services/types'
+import type { DateRangeKey, IntervalKey } from '@/services/types'
+import { DEFAULT_INTERVAL } from '@/services/types'
+import {
+  addLocalDays,
+  addLocalMonths,
+  localDayKey,
+  localMonthKey,
+  localYearKey,
+  resolveClientTimeZone,
+  startOfLocalDay,
+  startOfLocalMonth,
+  startOfLocalWeek,
+  startOfLocalYear,
+} from '@/lib/timezone'
 
 import { mockCategories } from './categories'
-import { mockBudgetLimits, mockChangesByRange, mockHistoricalMonthly, mockTotalBalance } from './summary'
+import { mockBudgetLimits } from './summary'
 import { mockTransactions } from './transactions'
 
 /* ------------------------------------------------------------------ */
-/* Range helpers                                                       */
+/* Reporting windows                                                   */
 /* ------------------------------------------------------------------ */
 
-export const rangeDays: Record<DateRangeKey, number> = {
+/**
+ * The windows the mock understands.
+ *
+ * They mirror the server exactly: a half-open interval `[from, to)` that
+ * starts on a local calendar boundary, so the demo build and the API build
+ * report on the same period.
+ */
+const RANGE_DAYS: Partial<Record<DateRangeKey, number>> = {
   '7d': 7,
   '30d': 30,
   '90d': 90,
-  '12m': 365,
+}
+
+const RANGE_MONTHS: Partial<Record<DateRangeKey, number>> = {
+  '12m': 12,
+  '3y': 36,
+}
+
+const RANGE_LABELS: Record<DateRangeKey, string> = {
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+  '90d': 'Last 90 days',
+  '12m': 'Last 12 months',
+  '3y': 'Last 3 years',
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-function startOfDay(date: Date): Date {
-  const copy = new Date(date)
-  copy.setHours(0, 0, 0, 0)
-  return copy
+export interface MockRange {
+  key: DateRangeKey
+  /** Inclusive start of the window. */
+  from: Date
+  /** Exclusive end of the window. */
+  to: Date
+  durationMs: number
+  /** How many local calendar days the window covers, both ends included. */
+  days: number
+  /**
+   * Inclusive start of the window that immediately precedes this one.
+   *
+   * Shifted back by a calendar step rather than by the same number of
+   * milliseconds, so the comparison window is a whole window too.
+   */
+  previousFrom: Date
+  label: string
 }
 
-function monthKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+/** Resolves a reporting window against a point in time. */
+export function resolveMockRange(range: DateRangeKey, now: Date = new Date()): MockRange {
+  const months = RANGE_MONTHS[range]
+  const days = RANGE_DAYS[range]
+  let from: Date
+
+  if (months) {
+    const monthStart = startOfLocalMonth(now)
+    from = startOfLocalMonth(addLocalMonths(monthStart, -(months - 1)))
+  } else {
+    const size = days ?? 30
+    from = addLocalDays(startOfLocalDay(now), -(size - 1))
+  }
+
+  const previousFrom = months
+    ? addLocalMonths(from, -months)
+    : addLocalDays(from, -(days ?? 30))
+
+  return {
+    key: range,
+    from,
+    to: now,
+    durationMs: now.getTime() - from.getTime(),
+    days: countLocalDays(from, now),
+    previousFrom,
+    label: RANGE_LABELS[range],
+  }
 }
 
-function monthLabel(date: Date): string {
-  return date.toLocaleDateString('en-US', { month: 'short' })
+/**
+ * How many local calendar days a window covers.
+ *
+ * The ends are read from the calendar rather than the clock, so a day that
+ * is 23 or 25 hours long still counts once — exactly as the server counts it.
+ */
+function countLocalDays(from: Date, to: Date): number {
+  const first = startOfLocalDay(from)
+  const last = startOfLocalDay(to)
+  return Math.max(1, Math.round((last.getTime() - first.getTime()) / DAY_MS) + 1)
 }
 
 /* ------------------------------------------------------------------ */
@@ -49,15 +128,128 @@ export function transactionsInRange(
   now: Date = new Date(),
   ledger: Transaction[] = mockTransactions,
 ): Transaction[] {
-  if (range === '12m') return ledger
-  const cutoff = now.getTime() - rangeDays[range] * DAY_MS
-  return ledger.filter((transaction) => new Date(transaction.date).getTime() >= cutoff)
+  const window = resolveMockRange(range, now)
+  return ledger.filter((transaction) => {
+    const time = new Date(transaction.date).getTime()
+    return time >= window.from.getTime() && time < window.to.getTime()
+  })
 }
 
 function sumBy(transactions: Transaction[], type: Transaction['type']): number {
   return transactions
     .filter((transaction) => transaction.type === type)
     .reduce((total, transaction) => total + transaction.amount, 0)
+}
+
+function netOf(transactions: Transaction[]): number {
+  return sumBy(transactions, 'income') - sumBy(transactions, 'expense')
+}
+
+/* ------------------------------------------------------------------ */
+/* Buckets                                                             */
+/* ------------------------------------------------------------------ */
+
+interface MockBucket {
+  key: string
+  label: string
+  fullLabel: string
+  start: Date
+  end: Date
+}
+
+/**
+ * The calendar buckets that cover a window.
+ *
+ * Buckets are aligned to the local calendar: a "week" is the local
+ * Sunday-to-Saturday week, a "month" the local calendar month.
+ */
+function buildBuckets(window: MockRange, interval: IntervalKey): MockBucket[] {
+  const buckets: MockBucket[] = []
+
+  let cursor = bucketStart(window.from, interval)
+  while (cursor.getTime() <= window.to.getTime()) {
+    const end = bucketEnd(cursor, interval)
+    buckets.push(describeBucket(cursor, end, interval))
+    cursor = bucketStart(end, interval)
+  }
+
+  return buckets
+}
+
+function bucketStart(instant: Date, interval: IntervalKey): Date {
+  switch (interval) {
+    case 'day':
+      return startOfLocalDay(instant)
+    case 'week':
+      return startOfLocalWeek(instant)
+    case 'month':
+      return startOfLocalMonth(instant)
+    case 'year':
+      return startOfLocalYear(instant)
+  }
+}
+
+function bucketEnd(start: Date, interval: IntervalKey): Date {
+  switch (interval) {
+    case 'day':
+      return addLocalDays(start, 1)
+    case 'week':
+      return addLocalDays(start, 7)
+    case 'month':
+      return addLocalMonths(start, 1)
+    case 'year':
+      return addLocalMonths(start, 12)
+  }
+}
+
+function describeBucket(start: Date, end: Date, interval: IntervalKey): MockBucket {
+  if (interval === 'year') {
+    const year = localYearKey(start)
+    return { key: year, label: year, fullLabel: year, start, end }
+  }
+
+  if (interval === 'month') {
+    return {
+      key: localMonthKey(start),
+      label: start.toLocaleDateString('en-US', { month: 'short' }),
+      fullLabel: start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+      start,
+      end,
+    }
+  }
+
+  const key = localDayKey(start)
+  const longDate = start.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+
+  if (interval === 'week') {
+    return {
+      key,
+      label: start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      fullLabel: `Week of ${start.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })}`,
+      start,
+      end,
+    }
+  }
+
+  const isFirstOfMonth = start.getDate() === 1
+
+  return {
+    key,
+    label: isFirstOfMonth
+      ? start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      : String(start.getDate()),
+    fullLabel: longDate,
+    start,
+    end,
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -67,105 +259,55 @@ function sumBy(transactions: Transaction[], type: Transaction['type']): number {
 /**
  * Cashflow series for the requested window.
  *
- * - 7D / 30D → daily buckets
- * - 90D      → weekly buckets
- * - 12M      → monthly buckets (recent months aggregated from the ledger,
- *              older months taken from the historical sample totals)
+ * Every point carries the running balance at the end of its bucket, rolled
+ * forward from everything that happened before the window — the same rule
+ * the server applies.
  */
 export function buildSeries(
   range: DateRangeKey,
+  interval: IntervalKey = DEFAULT_INTERVAL[range],
   now: Date = new Date(),
   ledger: Transaction[] = mockTransactions,
 ): CashflowPoint[] {
-  if (range === '12m') return buildMonthlySeries(now, ledger)
-  if (range === '90d') return buildBuckets(rangeDays[range], 7, now, ledger)
-  return buildBuckets(rangeDays[range], 1, now, ledger)
-}
+  const window = resolveMockRange(range, now)
+  const buckets = buildBuckets(window, interval)
 
-/** Buckets of `size` days covering the last `totalDays` days, oldest first. */
-function buildBuckets(
-  totalDays: number,
-  size: number,
-  now: Date,
-  ledger: Transaction[],
-): CashflowPoint[] {
-  const transactions = transactionsInRange(size === 1 ? '30d' : '90d', now, ledger).filter(
-    (transaction) =>
-      new Date(transaction.date).getTime() >= now.getTime() - totalDays * DAY_MS,
+  const opening = ledger.filter(
+    (transaction) => new Date(transaction.date).getTime() < window.from.getTime(),
   )
-  const bucketCount = Math.ceil(totalDays / size)
-  const today = startOfDay(now)
 
-  const buckets: CashflowPoint[] = Array.from({ length: bucketCount }, (_, index) => {
-    const bucketStart = new Date(today.getTime() - (bucketCount - 1 - index) * size * DAY_MS)
-    const bucketEnd = new Date(bucketStart.getTime() + size * DAY_MS)
-    const inBucket = transactions.filter((transaction) => {
+  let running = netOf(opening)
+
+  return buckets.map((bucket) => {
+    const inBucket = ledger.filter((transaction) => {
       const time = new Date(transaction.date).getTime()
-      return time >= bucketStart.getTime() && time < bucketEnd.getTime()
+      return time >= bucket.start.getTime() && time < bucket.end.getTime()
     })
 
+    const income = sumBy(inBucket, 'income')
+    const expenses = sumBy(inBucket, 'expense')
+    running += income - expenses
+
     return {
-      key: bucketStart.toISOString(),
-      label: labelFor(bucketStart, size),
-      income: sumBy(inBucket, 'income'),
-      expenses: sumBy(inBucket, 'expense'),
+      key: bucket.key,
+      label: bucket.label,
+      fullLabel: bucket.fullLabel,
+      income: round2(income),
+      expenses: round2(expenses),
+      balance: round2(running),
     }
   })
-
-  return buckets
 }
 
-function labelFor(date: Date, size: number): string {
-  if (size === 1) {
-    const sameMonth = date.getDate() === 1
-    return sameMonth
-      ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      : String(date.getDate())
-  }
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
-/** Twelve calendar months, oldest first, combining ledger and historical totals. */
-function buildMonthlySeries(now: Date, ledger: Transaction[] = mockTransactions): CashflowPoint[] {
-  const months: Array<{ key: string; label: string; income: number; expenses: number }> = []
-
-  for (let offset = 11; offset >= 0; offset -= 1) {
-    const date = new Date(now.getFullYear(), now.getMonth() - offset, 1)
-    months.push({ key: monthKey(date), label: monthLabel(date), income: 0, expenses: 0 })
-  }
-
-  // Recent months come from the ledger so chart, cards and transactions agree.
-  for (const transaction of ledger) {
-    const date = new Date(transaction.date)
-    const bucket = months.find((month) => month.key === monthKey(date))
-    if (!bucket) continue
-    if (transaction.type === 'income') bucket.income += transaction.amount
-    else bucket.expenses += transaction.amount
-  }
-
-  // Fill any month the ledger does not cover with the historical sample totals.
-  let fallbackIndex = 0
-  for (const month of months) {
-    if (month.income !== 0 || month.expenses !== 0) continue
-    const fallback = mockHistoricalMonthly[fallbackIndex]
-    fallbackIndex += 1
-    if (!fallback) break
-    month.income = fallback.income
-    month.expenses = fallback.expenses
-  }
-
-  return months
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
 }
 
 /* ------------------------------------------------------------------ */
 /* Breakdown                                                           */
 /* ------------------------------------------------------------------ */
 
-/**
- * Spend per category for the requested window.
- * For the 12-month window the ledger only covers the recent months, so the
- * per-category amounts are scaled to match the annual total.
- */
+/** Spend per category for the requested window. */
 export function buildCategoryBreakdown(
   range: DateRangeKey,
   now: Date = new Date(),
@@ -177,31 +319,22 @@ export function buildCategoryBreakdown(
   const totals = new Map<string, number>()
 
   for (const transaction of transactions) {
-    totals.set(transaction.categoryId, (totals.get(transaction.categoryId) ?? 0) + transaction.amount)
+    totals.set(
+      transaction.categoryId,
+      (totals.get(transaction.categoryId) ?? 0) + transaction.amount,
+    )
   }
 
-  let entries = Array.from(totals.entries()).map(([categoryId, amount]) => {
+  const entries = Array.from(totals.entries()).map(([categoryId, amount]) => {
     const category = mockCategories.find((item) => item.id === categoryId)
     return {
       categoryId,
       name: category?.name ?? transactionLabel(categoryId),
-      amount,
+      amount: round2(amount),
       share: 0,
       color: category?.color ?? '#98a2ae',
     }
   })
-
-  if (range === '12m') {
-    const annualExpenses = buildMonthlySeries(now, ledger).reduce(
-      (total, month) => total + month.expenses,
-      0,
-    )
-    const ledgerTotal = entries.reduce((total, entry) => total + entry.amount, 0)
-    if (ledgerTotal > 0 && annualExpenses > 0) {
-      const factor = annualExpenses / ledgerTotal
-      entries = entries.map((entry) => ({ ...entry, amount: entry.amount * factor }))
-    }
-  }
 
   const total = entries.reduce((sum, entry) => sum + entry.amount, 0)
 
@@ -218,23 +351,83 @@ function transactionLabel(categoryId: string): string {
 /* Summary                                                             */
 /* ------------------------------------------------------------------ */
 
+function percentageChange(current: number, previous: number): number {
+  if (previous === 0) return current === 0 ? 0 : 100
+  return ((current - previous) / Math.abs(previous)) * 100
+}
+
 /** Headline metrics for the requested window. */
 export function buildSummary(
   range: DateRangeKey,
   now: Date = new Date(),
   ledger: Transaction[] = mockTransactions,
 ): SummaryMetrics {
-  const series = buildSeries(range, now, ledger)
-  const income = series.reduce((total, point) => total + point.income, 0)
-  const expenses = series.reduce((total, point) => total + point.expenses, 0)
-  const savingsRate = income > 0 ? ((income - expenses) / income) * 100 : 0
+  const window = resolveMockRange(range, now)
+  const previousFrom = window.previousFrom
+
+  const current = transactionsInRange(range, now, ledger)
+  const previous = ledger.filter((transaction) => {
+    const time = new Date(transaction.date).getTime()
+    return time >= previousFrom.getTime() && time < window.from.getTime()
+  })
+  const allTime = ledger.filter(
+    (transaction) => new Date(transaction.date).getTime() < window.to.getTime(),
+  )
+  const beforeWindow = ledger.filter(
+    (transaction) => new Date(transaction.date).getTime() < window.from.getTime(),
+  )
+
+  const income = sumBy(current, 'income')
+  const expenses = sumBy(current, 'expense')
+  const balance = income - expenses
+  const allTimeBalance = netOf(allTime)
+  const previousBalance = netOf(beforeWindow)
+
+  const previousIncome = sumBy(previous, 'income')
+  const previousExpenses = sumBy(previous, 'expense')
+  const previousNet = previousIncome - previousExpenses
+  const savingsRate = income > 0 ? (balance / income) * 100 : 0
+  const previousSavingsRate =
+    previousIncome > 0 ? ((previousIncome - previousExpenses) / previousIncome) * 100 : 0
+
+  const period: ReportingPeriod = {
+    key: window.key,
+    from: window.from.toISOString(),
+    to: window.to.toISOString(),
+    days: window.days,
+    label: window.label,
+    timeZone: resolveClientTimeZone(),
+  }
 
   return {
-    totalBalance: mockTotalBalance,
-    income,
-    expenses,
-    savingsRate,
-    changes: mockChangesByRange[range],
+    balance: round2(balance),
+    allTimeBalance: round2(allTimeBalance),
+    income: round2(income),
+    expenses: round2(expenses),
+    savingsRate: round2(savingsRate),
+    period,
+    changes: {
+      balance: {
+        value: round2(percentageChange(allTimeBalance, previousBalance)),
+        isPositive: allTimeBalance >= previousBalance,
+      },
+      net: {
+        value: round2(percentageChange(balance, previousNet)),
+        isPositive: balance >= previousNet,
+      },
+      income: {
+        value: round2(percentageChange(income, previousIncome)),
+        isPositive: income >= previousIncome,
+      },
+      expenses: {
+        value: round2(percentageChange(expenses, previousExpenses)),
+        isPositive: expenses <= previousExpenses,
+      },
+      savingsRate: {
+        value: round2(savingsRate - previousSavingsRate),
+        isPositive: savingsRate >= previousSavingsRate,
+      },
+    },
   }
 }
 
@@ -248,12 +441,12 @@ export function buildBudgets(
   ledger: Transaction[] = mockTransactions,
   limits: typeof mockBudgetLimits = mockBudgetLimits,
 ): Budget[] {
-  const currentMonth = monthKey(now)
+  const currentMonth = localMonthKey(now)
   const spentByCategory = new Map<string, number>()
 
   for (const transaction of ledger) {
     if (transaction.type !== 'expense') continue
-    if (monthKey(new Date(transaction.date)) !== currentMonth) continue
+    if (localMonthKey(new Date(transaction.date)) !== currentMonth) continue
     spentByCategory.set(
       transaction.categoryId,
       (spentByCategory.get(transaction.categoryId) ?? 0) + transaction.amount,
@@ -315,7 +508,7 @@ export function buildTopMerchants(
     .map(([id, value]) => ({
       id,
       name: value.name,
-      amount: value.amount,
+      amount: round2(value.amount),
       count: value.count,
       category: mockCategories.find((category) => category.id === value.categoryId)?.name ?? 'Other',
       color: mockCategories.find((category) => category.id === value.categoryId)?.color ?? '#98a2ae',

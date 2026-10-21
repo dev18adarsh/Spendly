@@ -61,7 +61,8 @@ export function CategoryBreakdown({
                   stroke="none"
                   startAngle={90}
                   endAngle={-270}
-                  isAnimationActive={false}
+                  animationDuration={620}
+                  animationEasing="ease-out"
                 >
                   {data.map((entry) => (
                     <Cell key={entry.categoryId} fill={entry.color} />

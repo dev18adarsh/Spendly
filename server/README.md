@@ -162,8 +162,59 @@ A request to a private route without a valid session is a `401 UNAUTHORIZED` (or
 | `sort` | `date`, `-date`, `amount`, `-amount`, `createdAt`, `-createdAt` | Sort field (default `-date`) |
 
 `GET /api/budgets` accepts `month` (1–12) and `year`; both default to the current UTC
-month. `GET /api/analytics/*` accept `range` (`7d`, `30d`, `90d`, `12m`, default `30d`);
-`/merchants` also accepts `limit` (1–50, default `6`).
+month. `/merchants` also accepts `limit` (1–50, default `6`).
+
+`GET /api/analytics/*`
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `range` | `7d` · `30d` · `90d` · `12m` · `3y` | Reporting window (default `30d`) |
+| `tz` | IANA zone | Zone the window and its buckets are drawn in (default `UTC`; an unrecognised zone falls back to `UTC` rather than failing) |
+| `interval` | `day` · `week` · `month` · `year` | Bucket size for `/cashflow` only (default depends on the range) |
+
+### Reporting windows and calculation rules
+
+`GET /api/transactions` also accepts `range` and `tz`, plus `to` as an **exclusive**
+bound (`to` is written `exclusiveTo` on the wire), so the list, the summary and the
+charts are always looking at the same rows.
+
+**The window.** Day-based ranges open at local midnight `N-1` days ago and close at the
+moment of the request; month-based ranges open on the first of the month `M-1` months
+ago. Every window is **half-open** — `[from, to)` — so a transaction is counted exactly
+once.
+
+| Figure | Rule |
+| --- | --- |
+| `income` | sum of `income` transactions with `from <= date < to` |
+| `expenses` | sum of `expense` transactions in the same window |
+| `balance` | `income - expenses` for the window |
+| `allTimeBalance` | `income - expenses` of every transaction before `to`, window or not |
+| `savingsRate` | `balance / income * 100`, `0` when there is no income |
+| `period.days` | local **calendar** days covered, both ends included |
+
+**Movement.** The window before this one is shifted back by a **calendar step** — `N`
+whole days or `M` whole months — not by the same number of milliseconds, so the
+comparison window is itself a whole window that starts at local midnight. `changes.net`
+compares the two windows' nets; `changes.balance` compares `allTimeBalance` with the
+balance that stood before the window opened; `changes.income`, `changes.expenses` and
+`changes.savingsRate` compare the same window pair. A change against a zero baseline is
+`100` when the current figure is non-zero and `0` when both are.
+
+**Buckets.** `/cashflow` truncates the same `[from, to)` interval into `interval` buckets
+with `$dateTrunc` in the reported zone. Weeks start on **Sunday**. Bucket keys are
+calendar strings (a day key, an ISO week key, a `YYYY-MM` month key, a `YYYY` year key)
+matched by key rather than by instant, so a transaction always lands in the bucket whose
+label it carries, and the running balance in each bucket is that bucket's own cumulative
+net. The last point reports the **all-time** balance so the series ends where the hero
+figure sits.
+
+Because the summary and the series are built from one resolved window, the sums across
+the chart equal the summary's `income` and `expenses` — `src/test/analytics.test.ts`
+asserts exactly that.
+
+All of it is computed from `range`, `interval` and `tz` on the server; the client never
+submits totals, and an empty account reports zeros rather than plausible-looking
+numbers. `src/test/reporting.test.ts` works several of these cases out by hand.
 
 ### Example
 

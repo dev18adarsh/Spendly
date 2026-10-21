@@ -14,9 +14,10 @@ import type {
   TransactionDraftUpdate,
   TransactionQuery,
 } from '@/services/types'
-import type { DateRangeKey } from '@/services/types'
+import type { DateRangeKey, IntervalKey } from '@/services/types'
 import type { MerchantSpend } from '@/data/mock/analytics'
 import type { PaymentMethod } from '@/types'
+import { resolveClientTimeZone } from '@/lib/timezone'
 
 import { CSRF_HEADER, currentCsrfToken, forgetCsrfToken, rememberCsrfToken } from './csrf'
 
@@ -146,6 +147,32 @@ interface ServerCategory {
   icon: string
 }
 
+/** The headline figures for a reporting window. */
+interface ServerSummary {
+  /** Net of the window: `income - expenses`. */
+  balance: number
+  /** Net of every transaction recorded before the window closed. */
+  allTimeBalance: number
+  income: number
+  expenses: number
+  savingsRate: number
+  period: {
+    key: string
+    from: string
+    to: string
+    days: number
+    label: string
+    timeZone: string
+  }
+  changes: {
+    balance: { value: number; isPositive: boolean }
+    net: { value: number; isPositive: boolean }
+    income: { value: number; isPositive: boolean }
+    expenses: { value: number; isPositive: boolean }
+    savingsRate: { value: number; isPositive: boolean }
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Mapping                                                             */
 /* ------------------------------------------------------------------ */
@@ -195,6 +222,40 @@ function toClientCategory(dto: ServerCategory): Category {
 }
 
 /**
+ * Maps the server's headline figures onto the shape the UI renders.
+ *
+ * The mapping is explicit so a missing field can never turn into `NaN` on a
+ * stat card — an unusable number is shown as a dash instead.
+ */
+function toClientSummary(dto: ServerSummary): SummaryMetrics {
+  const safe = (value: number | undefined): number =>
+    typeof value === 'number' && Number.isFinite(value) ? value : 0
+
+  return {
+    balance: safe(dto.balance),
+    allTimeBalance: safe(dto.allTimeBalance),
+    income: safe(dto.income),
+    expenses: safe(dto.expenses),
+    savingsRate: safe(dto.savingsRate),
+    period: {
+      key: dto.period?.key ?? '',
+      from: dto.period?.from ?? '',
+      to: dto.period?.to ?? '',
+      days: safe(dto.period?.days),
+      label: dto.period?.label ?? '',
+      timeZone: dto.period?.timeZone ?? 'UTC',
+    },
+    changes: {
+      balance: dto.changes?.balance ?? { value: 0, isPositive: true },
+      net: dto.changes?.net ?? { value: 0, isPositive: true },
+      income: dto.changes?.income ?? { value: 0, isPositive: true },
+      expenses: dto.changes?.expenses ?? { value: 0, isPositive: true },
+      savingsRate: dto.changes?.savingsRate ?? { value: 0, isPositive: true },
+    },
+  }
+}
+
+/**
  * Maps a client draft onto the API's write payload.
  *
  * The API calls the headline of an entry `description` and treats `merchant`
@@ -229,27 +290,15 @@ function toServerPayload(draft: TransactionDraft | TransactionDraftUpdate): Reco
 /* Query helpers                                                       */
 /* ------------------------------------------------------------------ */
 
-const RANGE_DAYS: Record<DateRangeKey, number> = {
-  '7d': 7,
-  '30d': 30,
-  '90d': 90,
-  '12m': 365,
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000
-
-/** Translates a range key into the absolute bounds the API filters on. */
-function rangeToBounds(range: DateRangeKey): { from: string; to: string } {
-  const now = new Date()
-  const to = now.toISOString()
-
-  if (range === '12m') {
-    const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1))
-    return { from: from.toISOString(), to }
-  }
-
-  const from = new Date(now.getTime() - RANGE_DAYS[range] * DAY_MS)
-  return { from: from.toISOString(), to }
+/**
+ * The timezone every report is calculated in.
+ *
+ * The browser knows which zone the user is in, the server does not — so the
+ * client names it, the server validates it and both sides bucket the day
+ * the same way.
+ */
+function currentTimeZone(): string {
+  return resolveClientTimeZone()
 }
 
 /** Page size used when the caller does not ask for a specific one. */
@@ -263,15 +312,24 @@ function toQueryString(query: TransactionQuery = {}): string {
   if (search) params.set('search', search)
   if (query.categoryId && query.categoryId !== 'all') params.set('category', query.categoryId)
   if (query.type && query.type !== 'all') params.set('type', query.type)
+  // The reporting window is resolved by the API with the very same code the
+  // analytics use, so a list and the totals beside it always agree.
   if (query.range) {
-    const { from, to } = rangeToBounds(query.range)
-    params.set('from', from)
-    params.set('to', to)
+    params.set('range', query.range)
+    params.set('tz', currentTimeZone())
   }
   params.set('limit', String(query.limit ?? DEFAULT_TRANSACTION_LIMIT))
 
   const serialized = params.toString()
   return serialized ? `?${serialized}` : ''
+}
+
+/** The query string of a report: the window plus the zone it is read in. */
+function reportQuery(range: DateRangeKey, interval?: IntervalKey): string {
+  const params = new URLSearchParams({ range, tz: currentTimeZone() })
+  if (interval) params.set('interval', interval)
+
+  return `?${params.toString()}`
 }
 
 /* ------------------------------------------------------------------ */
@@ -419,14 +477,24 @@ export function createHttpClient(baseUrl: string): SpendlyApi {
   const { request, root } = createRequester(baseUrl)
 
   return {
-    getSummary(range: DateRangeKey, signal) {
-      return request<SummaryMetrics>(`${root}/analytics/summary?range=${range}`, { signal })
+    async getSummary(range: DateRangeKey, signal) {
+      const summary = await request<ServerSummary>(
+        `${root}/analytics/summary${reportQuery(range)}`,
+        { signal },
+      )
+      return toClientSummary(summary)
     },
-    getCashflow(range: DateRangeKey, signal) {
-      return request<CashflowPoint[]>(`${root}/analytics/cashflow?range=${range}`, { signal })
+    getCashflow(range: DateRangeKey, interval, signal) {
+      return request<CashflowPoint[]>(
+        `${root}/analytics/cashflow${reportQuery(range, interval)}`,
+        { signal },
+      )
     },
     getCategoryBreakdown(range: DateRangeKey, signal) {
-      return request<CategorySpend[]>(`${root}/analytics/categories?range=${range}`, { signal })
+      return request<CategorySpend[]>(
+        `${root}/analytics/categories${reportQuery(range)}`,
+        { signal },
+      )
     },
     async getTransactions(query, signal) {
       const transactions = await request<ServerTransaction[]>(
@@ -444,8 +512,9 @@ export function createHttpClient(baseUrl: string): SpendlyApi {
       return categories.map(toClientCategory)
     },
     getTopMerchants(range: DateRangeKey, limit = 6, signal) {
+      const params = new URLSearchParams({ range, tz: currentTimeZone(), limit: String(limit) })
       return request<MerchantSpend[]>(
-        `${root}/analytics/merchants?range=${range}&limit=${limit}`,
+        `${root}/analytics/merchants?${params.toString()}`,
         { signal },
       )
     },

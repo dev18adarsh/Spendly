@@ -5,6 +5,7 @@ import type {
   Category,
   CategorySpend,
   PaymentMethod,
+  ReportingPeriod,
   SummaryMetrics,
   Transaction,
   TransactionStatus,
@@ -12,7 +13,7 @@ import type {
 } from '@/types'
 
 /** Supported reporting windows. */
-export type DateRangeKey = '7d' | '30d' | '90d' | '12m'
+export type DateRangeKey = '7d' | '30d' | '90d' | '12m' | '3y'
 
 export interface DateRangeOption {
   key: DateRangeKey
@@ -25,7 +26,48 @@ export const DATE_RANGES: DateRangeOption[] = [
   { key: '30d', label: 'Last 30 days', shortLabel: '30D' },
   { key: '90d', label: 'Last 90 days', shortLabel: '90D' },
   { key: '12m', label: 'Last 12 months', shortLabel: '12M' },
+  { key: '3y', label: 'Last 3 years', shortLabel: '3Y' },
 ]
+
+/** The bucket sizes a trend series can be grouped by. */
+export type IntervalKey = 'day' | 'week' | 'month' | 'year'
+
+export interface IntervalOption {
+  key: IntervalKey
+  label: string
+  /** Longer name for screen readers. */
+  title: string
+}
+
+export const INTERVALS: IntervalOption[] = [
+  { key: 'day', label: 'Day', title: 'Daily' },
+  { key: 'week', label: 'Week', title: 'Weekly' },
+  { key: 'month', label: 'Month', title: 'Monthly' },
+  { key: 'year', label: 'Year', title: 'Yearly' },
+]
+
+/**
+ * The bucket sizes that make sense for a window.
+ *
+ * A seven day window cannot be read per year and a three year window is
+ * unreadable per day, so the selector only offers what fits.
+ */
+export const INTERVALS_BY_RANGE: Record<DateRangeKey, IntervalKey[]> = {
+  '7d': ['day', 'week'],
+  '30d': ['day', 'week', 'month'],
+  '90d': ['week', 'month'],
+  '12m': ['month', 'year'],
+  '3y': ['month', 'year'],
+}
+
+/** The bucket size a window falls back to when the user has not picked one. */
+export const DEFAULT_INTERVAL: Record<DateRangeKey, IntervalKey> = {
+  '7d': 'day',
+  '30d': 'day',
+  '90d': 'week',
+  '12m': 'month',
+  '3y': 'year',
+}
 
 export interface TransactionQuery {
   search?: string
@@ -82,7 +124,11 @@ export interface BudgetDraft {
  */
 export interface SpendlyApi {
   getSummary(range: DateRangeKey, signal?: AbortSignal): Promise<SummaryMetrics>
-  getCashflow(range: DateRangeKey, signal?: AbortSignal): Promise<CashflowPoint[]>
+  getCashflow(
+    range: DateRangeKey,
+    interval?: IntervalKey,
+    signal?: AbortSignal,
+  ): Promise<CashflowPoint[]>
   getCategoryBreakdown(range: DateRangeKey, signal?: AbortSignal): Promise<CategorySpend[]>
   getTransactions(query?: TransactionQuery, signal?: AbortSignal): Promise<Transaction[]>
   getBudgets(signal?: AbortSignal): Promise<Budget[]>
@@ -100,7 +146,15 @@ export interface SpendlyApi {
   createBudget(draft: BudgetDraft): Promise<Budget>
 }
 
-export type { Budget, CashflowPoint, Category, CategorySpend, SummaryMetrics, Transaction }
+export type {
+  Budget,
+  CashflowPoint,
+  Category,
+  CategorySpend,
+  ReportingPeriod,
+  SummaryMetrics,
+  Transaction,
+}
 
 /* ------------------------------------------------------------------ */
 /* Authentication                                                       */

@@ -2,6 +2,7 @@ import { Router } from 'express'
 
 import {
   analyticsQuerySchema,
+  cashflowQuerySchema,
   getCashflow,
   getCategoryBreakdown,
   getSummary,
@@ -24,7 +25,7 @@ analyticsRouter.get(
 )
 analyticsRouter.get(
   '/cashflow',
-  validate(analyticsQuerySchema, 'query'),
+  validate(cashflowQuerySchema, 'query'),
   requireDatabase,
   requireAuth,
   getCashflow,

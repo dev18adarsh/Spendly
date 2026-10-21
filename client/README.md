@@ -75,6 +75,33 @@ src/
 * **Accessible by default.** Labelled controls, focus-trapped modals, semantic landmarks,
   a skip link, and a global `prefers-reduced-motion` override.
 
+## The dashboard's reporting windows
+
+`DashboardPage` holds two pieces of state: the window (`7d` · `30d` · `90d` · `12m` ·
+`3y`) and the trend granularity (`day` · `week` · `month` · `year`).
+
+* The window is sent to the API as `range`, the browser's zone as `tz`, and the
+  granularity as `interval` — **the server resolves every boundary from those three**,
+  so the client never sends a date range for the backend to trust, and no figure is
+  computed twice.
+* Changing the window resets the granularity only when the current one no longer fits it
+  (`INTERVALS_BY_RANGE` / `DEFAULT_INTERVAL`): a three-year window cannot be read per day.
+* Because the cards, the cashflow chart, the trend chart, the donut and the transaction
+  list all read the **same** resolved window, their totals agree by construction — the
+  cashflow buckets sum to the income and expense cards, and the series ends on the
+  all-time balance shown by the hero card.
+* A caption under the page header spells the window out in words — `Reporting period:
+  Last 30 days · Sep 22 – Oct 21, 2026 · 30 days in Asia/Calcutta` — so "for a clearly
+  defined date period" is never a guess.
+* A successful mutation raises the data revision, and every figure recalculates without a
+  reload.
+
+Dates are rendered in the same zone the report was calculated in (`lib/timezone.ts`), and
+money goes through `lib/format.ts`, which returns an em dash for a figure that cannot be
+rendered instead of a misleading zero. `data/mock/analytics.ts` derives the same window,
+buckets, totals and movements from one sample ledger, so the preview build behaves
+identically without a database.
+
 ## Working with transactions
 
 The same dialog creates and edits a transaction. It is opened through

@@ -3,7 +3,7 @@ import { ArrowDownLeft, ArrowUpRight, Clock } from 'lucide-react'
 
 import { CategoryAvatar } from '@/components/ui/CategoryAvatar'
 import { cn } from '@/lib/cn'
-import { formatCurrency, formatRelativeTime } from '@/lib/format'
+import { formatCurrency, formatMediumDate, formatRelativeTime, formatShortDate } from '@/lib/format'
 import type { Transaction } from '@/types'
 
 export interface TransactionRowProps {
@@ -51,6 +51,7 @@ export function TransactionRow({
             isIncome ? 'text-positive' : 'text-ink',
           )}
         >
+          <span className="sr-only">{isIncome ? 'Income' : 'Expense'} </span>
           {isIncome ? '+' : '−'}
           {formatCurrency(transaction.amount)}
         </span>
@@ -68,12 +69,13 @@ export function TransactionRow({
               ) : (
                 <ArrowUpRight className="size-3" aria-hidden="true" />
               )}
-              {showDate
-                ? new Date(transaction.date).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                  })
-                : formatRelativeTime(transaction.date)}
+              {showDate ? (
+                <time dateTime={transaction.date} title={formatMediumDate(transaction.date)}>
+                  {formatShortDate(transaction.date)}
+                </time>
+              ) : (
+                formatRelativeTime(transaction.date)
+              )}
             </span>
           )}
         </span>

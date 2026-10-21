@@ -87,7 +87,9 @@ export function SpendingChart({ data, loading, className }: SpendingChartProps) 
 
               <Tooltip
                 cursor={{ stroke: 'var(--color-line-strong)', strokeWidth: 1 }}
-                content={(props) => <CashflowTooltip {...(props as unknown as CashflowTooltipProps)} />}
+                content={(props) => (
+                  <CashflowTooltip {...(props as unknown as CashflowTooltipProps)} />
+                )}
               />
 
               {SERIES.map((series) => (
@@ -101,7 +103,8 @@ export function SpendingChart({ data, loading, className }: SpendingChartProps) 
                   fill={`url(#${gradientIds[series.key]})`}
                   dot={false}
                   activeDot={{ r: 3.5, strokeWidth: 2, stroke: 'var(--color-surface)' }}
-                  isAnimationActive={false}
+                  animationDuration={520}
+                  animationEasing="ease-out"
                 />
               ))}
             </AreaChart>
@@ -139,6 +142,7 @@ interface TooltipEntry {
   name?: string | number
   value?: number | string
   dataKey?: string | number
+  payload?: CashflowPoint
 }
 
 interface CashflowTooltipProps {
@@ -147,37 +151,71 @@ interface CashflowTooltipProps {
   payload?: TooltipEntry[]
 }
 
+/**
+ * The tooltip of the cashflow chart.
+ *
+ * It names the period the point belongs to and adds the net of the bucket,
+ * so the reader does not have to subtract one figure from the other.
+ */
 function CashflowTooltip({ active, payload, label }: CashflowTooltipProps) {
   if (!active || !payload || payload.length === 0) return null
 
+  const point = payload[0]?.payload
+  const income = Number(payload.find((entry) => entry.dataKey === 'income')?.value ?? 0)
+  const expenses = Number(payload.find((entry) => entry.dataKey === 'expenses')?.value ?? 0)
+  const net = income - expenses
+
   return (
-    <div className="min-w-[168px] rounded-control border border-line-strong bg-surface-2/95 p-3 shadow-pop backdrop-blur">
-      <p className="text-[11px] font-medium text-ink-faint">{label}</p>
+    <div className="min-w-[184px] rounded-control border border-line-strong bg-surface-2/95 p-3 shadow-pop backdrop-blur">
+      <p className="text-[11px] font-medium text-ink-faint">
+        {point?.fullLabel ?? String(label ?? '')}
+      </p>
 
       <ul className="mt-2 space-y-1.5">
-        {payload.map((entry, index) => {
-          const value = typeof entry.value === 'number' ? entry.value : Number(entry.value ?? 0)
-          const isIncome = entry.dataKey === 'income'
-          const color = isIncome ? 'var(--color-brand)' : 'var(--color-negative)'
-
-          return (
-            <li
-              key={`${String(entry.dataKey)}-${index}`}
-              className="flex items-center justify-between gap-4"
-            >
-              <span className="flex items-center gap-1.5 text-xs text-ink-muted">
-                <span
-                  aria-hidden="true"
-                  className="size-2 rounded-full"
-                  style={{ backgroundColor: color }}
-                />
-                {entry.name ?? (isIncome ? 'Income' : 'Expenses')}
-              </span>
-              <span className="text-xs font-medium text-ink tabular">{formatCurrency(value)}</span>
-            </li>
-          )
-        })}
+        <TooltipRow label="Income" value={income} color="var(--color-brand)" />
+        <TooltipRow label="Expenses" value={expenses} color="var(--color-negative)" />
       </ul>
+
+      <div className="mt-2 flex items-center justify-between gap-4 border-t border-line pt-2">
+        <span className="text-xs text-ink-muted">Net</span>
+        <span
+          className={cn(
+            'text-xs font-medium tabular',
+            net >= 0 ? 'text-positive' : 'text-negative',
+          )}
+        >
+          {formatCurrency(net)}
+        </span>
+      </div>
+
+      {point ? (
+        <div className="mt-1.5 flex items-center justify-between gap-4">
+          <span className="text-[11px] text-ink-faint">Balance</span>
+          <span className="text-[11px] font-medium text-ink-muted tabular">
+            {formatCurrency(point.balance)}
+          </span>
+        </div>
+      ) : null}
     </div>
+  )
+}
+
+function TooltipRow({
+  label,
+  value,
+  color,
+}: {
+  label: string
+  value: number
+  color: string
+}) {
+  return (
+    <li className="flex items-center justify-between gap-4">
+      <span className="flex items-center gap-1.5 text-xs text-ink-muted">
+        <span aria-hidden="true" className="size-2 rounded-full" style={{ backgroundColor: color }} />
+        {label}
+      </span>
+      <span className="text-xs font-medium text-ink tabular">{formatCurrency(value)}</span>
+    </li>
   )
 }

@@ -6,80 +6,71 @@ import type {
   CategorySpendDto,
   MerchantSpendDto,
   MetricChangeDto,
+  ReportingPeriodDto,
   SummaryDto,
 } from '../types/api.js'
+import { DEFAULT_TIME_ZONE } from '../utils/timezone.js'
 import { resolveCategories } from './category.service.js'
 import { toCategorySpendDto } from './mappers.js'
+import {
+  buildBuckets,
+  DEFAULT_INTERVAL,
+  KEY_FORMAT,
+  resolveRange,
+  type IntervalKey,
+  type RangeKey,
+  type ResolvedRange,
+} from './reporting-window.js'
 
-/** Reporting windows supported by the API. */
-export const RANGE_KEYS = ['7d', '30d', '90d', '12m'] as const
-
-export type RangeKey = (typeof RANGE_KEYS)[number]
-
-export const RANGE_DAYS: Record<RangeKey, number> = {
-  '7d': 7,
-  '30d': 30,
-  '90d': 90,
-  '12m': 365,
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000
-
-export function isRangeKey(value: string): value is RangeKey {
-  return Object.prototype.hasOwnProperty.call(RANGE_DAYS, value)
-}
-
-export interface ResolvedRange {
-  key: RangeKey
-  from: Date
-  to: Date
-  /** Length of the window in milliseconds. */
-  durationMs: number
-}
-
-type BucketUnit = 'day' | 'week' | 'month'
-
-function bucketUnitFor(key: RangeKey): BucketUnit {
-  if (key === '12m') return 'month'
-  if (key === '90d') return 'week'
-  return 'day'
-}
-
-/** How many buckets a window is divided into. */
-function bucketCountFor(key: RangeKey): number {
-  if (key === '12m') return 12
-  if (key === '90d') return Math.ceil(RANGE_DAYS[key] / 7)
-  return RANGE_DAYS[key]
-}
+export {
+  DEFAULT_INTERVAL,
+  INTERVAL_KEYS,
+  INTERVALS_BY_RANGE,
+  isIntervalKey,
+  isRangeKey,
+  RANGE_DAYS,
+  RANGE_KEYS,
+  RANGE_LABELS,
+  RANGE_MONTHS,
+  resolveRange,
+} from './reporting-window.js'
+export type {
+  BucketDescriptor,
+  IntervalKey,
+  RangeKey,
+  ResolvedRange,
+} from './reporting-window.js'
 
 /**
- * The window a reporting range covers.
+ * The calculation rules the dashboard relies on.
  *
- * Buckets are aligned to the end of the window so the last bucket is the
- * current day (or week, or month).
+ * Every window is a half-open interval `[from, to)`:
+ *
+ * - **income** — the sum of every `income` transaction inside the window.
+ * - **expenses** — the sum of every `expense` transaction inside the window.
+ * - **balance** — `income - expenses` for the window. It is the money the
+ *   window itself produced, so it always moves with the charts.
+ * - **all-time balance** — `income - expenses` over every transaction that
+ *   was recorded before the window closed. It is the running balance the
+ *   chart's sparkline ends on.
+ * - **savings rate** — `balance / income * 100`, or `0` when there was no
+ *   income in the window.
+ *
+ * Amounts are stored in the major unit of the currency and rounded to two
+ * decimals only when they leave the server.
  */
-export function resolveRange(key: RangeKey, now: Date = new Date()): ResolvedRange {
-  const count = bucketCountFor(key)
-  const to = new Date(now)
-
-  let from: Date
-  if (key === '12m') {
-    from = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() - 11, 1))
-  } else if (key === '90d') {
-    from = new Date(startOfDayUtc(to).getTime() - (count - 1) * 7 * DAY_MS)
-  } else {
-    from = new Date(startOfDayUtc(to).getTime() - (count - 1) * DAY_MS)
-  }
-
-  return { key, from, to, durationMs: to.getTime() - from.getTime() }
-}
 
 interface Totals {
   income: number
   expenses: number
 }
 
-/** Income and expense totals for a window (both bounds optional). */
+/**
+ * Income and expense totals inside a window.
+ *
+ * `from` is inclusive, `to` is exclusive. Passing neither returns the totals
+ * for every transaction on record.
+ */
 async function totalsBetween(
   userId: string,
   from?: Date,
@@ -87,13 +78,14 @@ async function totalsBetween(
 ): Promise<Totals> {
   const match: Record<string, unknown> = { userId: new Types.ObjectId(userId) }
   if (from || to) {
-    match.date = {}
-    if (from) (match.date as Record<string, Date>).$gte = from
-    if (to) (match.date as Record<string, Date>).$lte = to
+    const date: Record<string, Date> = {}
+    if (from) date.$gte = from
+    if (to) date.$lt = to
+    match.date = date
   }
 
   const rows = await TransactionModel.aggregate<{ _id: string; total: number }>([
-    ...(Object.keys(match).length > 0 ? [{ $match: match }] : []),
+    { $match: match },
     { $group: { _id: '$type', total: { $sum: '$amount' } } },
   ]).exec()
 
@@ -114,169 +106,161 @@ function metricChange(value: number, isPositive: boolean): MetricChangeDto {
   return { value: Math.round(value * 100) / 100, isPositive }
 }
 
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+function toPeriodDto(range: ResolvedRange): ReportingPeriodDto {
+  return {
+    key: range.key,
+    from: range.from.toISOString(),
+    to: range.to.toISOString(),
+    days: range.days,
+    label: range.label,
+    timeZone: range.timeZone,
+  }
+}
+
 /**
  * Headline metrics for a reporting window.
  *
- * `totalBalance` is the all-time balance (every income minus every expense),
- * while the other figures cover the selected window only.
+ * The window is half-open (`[from, to)`) and expressed in the requested
+ * timezone, so a transaction on the very first day belongs to the window and
+ * the previous window ends exactly where this one begins.
  */
 export async function getSummary(
   userId: string,
   key: RangeKey,
   now: Date = new Date(),
+  timeZone: string = DEFAULT_TIME_ZONE,
 ): Promise<SummaryDto> {
-  const range = resolveRange(key, now)
-  const previousFrom = new Date(range.from.getTime() - range.durationMs)
-  const previousTo = range.from
+  const range = resolveRange(key, now, timeZone)
 
   const [current, previous, allTime, beforeWindow] = await Promise.all([
     totalsBetween(userId, range.from, range.to),
-    totalsBetween(userId, previousFrom, previousTo),
-    totalsBetween(userId),
-    totalsBetween(userId, undefined, previousTo),
+    totalsBetween(userId, range.previousFrom, range.from),
+    totalsBetween(userId, undefined, range.to),
+    totalsBetween(userId, undefined, range.from),
   ])
 
-  const totalBalance = allTime.income - allTime.expenses
+  const balance = current.income - current.expenses
+  const allTimeBalance = allTime.income - allTime.expenses
   const previousBalance = beforeWindow.income - beforeWindow.expenses
+  const previousWindowBalance = previous.income - previous.expenses
 
-  const savingsRate = current.income > 0 ? ((current.income - current.expenses) / current.income) * 100 : 0
+  const savingsRate = current.income > 0 ? (balance / current.income) * 100 : 0
   const previousSavingsRate =
     previous.income > 0 ? ((previous.income - previous.expenses) / previous.income) * 100 : 0
 
   return {
-    totalBalance: Math.round(totalBalance * 100) / 100,
-    income: Math.round(current.income * 100) / 100,
-    expenses: Math.round(current.expenses * 100) / 100,
-    savingsRate: Math.round(savingsRate * 100) / 100,
+    balance: round2(balance),
+    allTimeBalance: round2(allTimeBalance),
+    income: round2(current.income),
+    expenses: round2(current.expenses),
+    savingsRate: round2(savingsRate),
+    period: toPeriodDto(range),
     changes: {
-      balance: metricChange(percentageChange(totalBalance, previousBalance), totalBalance >= previousBalance),
-      income: metricChange(percentageChange(current.income, previous.income), current.income >= previous.income),
+      balance: metricChange(
+        percentageChange(allTimeBalance, previousBalance),
+        allTimeBalance >= previousBalance,
+      ),
+      net: metricChange(
+        percentageChange(balance, previousWindowBalance),
+        balance >= previousWindowBalance,
+      ),
+      income: metricChange(
+        percentageChange(current.income, previous.income),
+        current.income >= previous.income,
+      ),
       expenses: metricChange(
         percentageChange(current.expenses, previous.expenses),
         current.expenses <= previous.expenses,
       ),
-      savingsRate: metricChange(savingsRate - previousSavingsRate, savingsRate >= previousSavingsRate),
+      savingsRate: metricChange(
+        savingsRate - previousSavingsRate,
+        savingsRate >= previousSavingsRate,
+      ),
     },
   }
 }
 
-function startOfDayUtc(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
-}
-
-function startOfMonthUtc(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1))
-}
-
-function nextBucket(date: Date, unit: BucketUnit): Date {
-  if (unit === 'day') return new Date(date.getTime() + DAY_MS)
-  if (unit === 'week') return new Date(date.getTime() + 7 * DAY_MS)
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1))
-}
-
-/** The list of bucket start instants covering a range. */
-function bucketStarts(range: ResolvedRange, unit: BucketUnit): Date[] {
-  const starts: Date[] = []
-  let cursor = unit === 'month' ? startOfMonthUtc(range.from) : startOfDayUtc(range.from)
-
-  while (cursor.getTime() <= range.to.getTime()) {
-    starts.push(cursor)
-    cursor = nextBucket(cursor, unit)
-  }
-
-  return starts
-}
-
 /**
- * The aggregation expression that maps a transaction date onto its bucket.
+ * Income and expense series for a reporting window.
  *
- * Daily and monthly buckets are calendar aligned. Weekly buckets are
- * seven-day windows counted from the start of the range, which is why they
- * use an offset rather than a calendar truncation.
- */
-function bucketExpression(unit: BucketUnit, range: ResolvedRange): Record<string, unknown> {
-  if (unit === 'week') {
-    return {
-      $dateAdd: {
-        startDate: range.from,
-        unit: 'week',
-        amount: {
-          $floor: { $divide: [{ $subtract: ['$date', range.from] }, 7 * DAY_MS] },
-        },
-      },
-    }
-  }
-
-  return { $dateTrunc: { date: '$date', unit, timezone: 'UTC' } }
-}
-
-function bucketKey(date: Date, unit: BucketUnit): string {
-  if (unit === 'month') {
-    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
-  }
-  return date.toISOString()
-}
-
-function bucketLabel(date: Date, unit: BucketUnit): string {
-  if (unit === 'month') {
-    return date.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
-  }
-  if (unit === 'day' && date.getUTCDate() !== 1) {
-    return String(date.getUTCDate())
-  }
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
-}
-
-/**
- * Income/expense series for a reporting window.
- *
- * Buckets are daily (7D/30D), weekly (90D) or monthly (12M).
+ * The buckets are calendar aligned in the requested timezone — a "week" is
+ * the local Sunday-to-Saturday week, a "month" the local calendar month.
+ * Every point also carries the running balance at the end of its bucket, so
+ * the client never has to derive one.
  */
 export async function getCashflow(
   userId: string,
   key: RangeKey,
   now: Date = new Date(),
+  timeZone: string = DEFAULT_TIME_ZONE,
+  interval?: IntervalKey,
 ): Promise<CashflowPointDto[]> {
-  const range = resolveRange(key, now)
-  const unit = bucketUnitFor(key)
+  const range = resolveRange(key, now, timeZone)
+  const unit = interval ?? DEFAULT_INTERVAL[key]
+  const buckets = buildBuckets(range, unit)
 
-  const rows = await TransactionModel.aggregate<{
-    _id: { bucket: Date; type: string }
-    total: number
-  }>([
-    {
-      $match: {
-        userId: new Types.ObjectId(userId),
-        date: { $gte: range.from, $lte: range.to },
-      },
+  // `$dateTrunc` snaps a transaction onto the calendar bucket it belongs to
+  // in the requested timezone; `$dateToString` turns that instant into a
+  // stable key the bucket list can be matched against.
+  const bucketExpression: Record<string, unknown> = {
+    $dateTrunc: { date: '$date', unit, timezone: range.timeZone },
+  }
+  const keyExpression: Record<string, unknown> = {
+    $dateToString: {
+      date: bucketExpression,
+      format: KEY_FORMAT[unit],
+      timezone: range.timeZone,
     },
-    {
-      $group: {
-        _id: {
-          bucket: bucketExpression(unit, range),
-          type: '$type',
+  }
+
+  const [rows, opening] = await Promise.all([
+    TransactionModel.aggregate<{ _id: { key: string; type: string }; total: number }>([
+      {
+        $match: {
+          userId: new Types.ObjectId(userId),
+          date: { $gte: range.from, $lt: range.to },
         },
-        total: { $sum: '$amount' },
       },
-    },
-  ]).exec()
+      {
+        $group: {
+          _id: {
+            key: keyExpression,
+            type: '$type',
+          },
+          total: { $sum: '$amount' },
+        },
+      },
+    ]).exec(),
+    totalsBetween(userId, undefined, range.from),
+  ])
 
   const totals = new Map<string, { income: number; expenses: number }>()
   for (const row of rows) {
-    const key = row._id.bucket.toISOString()
-    const bucket = totals.get(key) ?? { income: 0, expenses: 0 }
+    const bucket = totals.get(row._id.key) ?? { income: 0, expenses: 0 }
     if (row._id.type === 'income') bucket.income += row.total
     else bucket.expenses += row.total
-    totals.set(key, bucket)
+    totals.set(row._id.key, bucket)
   }
 
-  return bucketStarts(range, unit).map((start) => {
-    const bucket = totals.get(start.toISOString()) ?? { income: 0, expenses: 0 }
+  // The balance starts from everything that happened before the window and
+  // rolls forward with the net of every bucket.
+  let running = opening.income - opening.expenses
+
+  return buckets.map((bucket) => {
+    const totalsForBucket = totals.get(bucket.key) ?? { income: 0, expenses: 0 }
+    running += totalsForBucket.income - totalsForBucket.expenses
+
     return {
-      key: bucketKey(start, unit),
-      label: bucketLabel(start, unit),
-      income: Math.round(bucket.income * 100) / 100,
-      expenses: Math.round(bucket.expenses * 100) / 100,
+      key: bucket.key,
+      label: bucket.label,
+      fullLabel: bucket.fullLabel,
+      income: round2(totalsForBucket.income),
+      expenses: round2(totalsForBucket.expenses),
+      balance: round2(running),
     }
   })
 }
@@ -286,15 +270,16 @@ export async function getCategoryBreakdown(
   userId: string,
   key: RangeKey,
   now: Date = new Date(),
+  timeZone: string = DEFAULT_TIME_ZONE,
 ): Promise<CategorySpendDto[]> {
-  const range = resolveRange(key, now)
+  const range = resolveRange(key, now, timeZone)
 
   const rows = await TransactionModel.aggregate<{ _id: string; total: number }>([
     {
       $match: {
         userId: new Types.ObjectId(userId),
         type: 'expense',
-        date: { $gte: range.from, $lte: range.to },
+        date: { $gte: range.from, $lt: range.to },
       },
     },
     { $group: { _id: '$category', total: { $sum: '$amount' } } },
@@ -308,7 +293,7 @@ export async function getCategoryBreakdown(
       const categoryMeta = meta.get(row._id)
       return toCategorySpendDto(
         row._id,
-        Math.round(row.total * 100) / 100,
+        round2(row.total),
         total,
         categoryMeta ?? {
           slug: row._id,
@@ -327,8 +312,9 @@ export async function getTopMerchants(
   key: RangeKey,
   limit = 6,
   now: Date = new Date(),
+  timeZone: string = DEFAULT_TIME_ZONE,
 ): Promise<MerchantSpendDto[]> {
-  const range = resolveRange(key, now)
+  const range = resolveRange(key, now, timeZone)
   const capped = Math.max(1, Math.min(limit, 50))
 
   const rows = await TransactionModel.aggregate<{
@@ -341,7 +327,7 @@ export async function getTopMerchants(
       $match: {
         userId: new Types.ObjectId(userId),
         type: 'expense',
-        date: { $gte: range.from, $lte: range.to },
+        date: { $gte: range.from, $lt: range.to },
       },
     },
     {
@@ -364,7 +350,7 @@ export async function getTopMerchants(
       id: row._id,
       name: row._id,
       category: categoryMeta?.name ?? row.category,
-      amount: Math.round(row.total * 100) / 100,
+      amount: round2(row.total),
       count: row.count,
       color: categoryMeta?.color ?? '#98a2ae',
     }

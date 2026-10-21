@@ -75,6 +75,7 @@ export function RecentTransactions({
                 transaction={transaction}
                 categoryIcon={category?.icon}
                 categoryColor={category?.color}
+                showDate
                 actions={
                   showActions ? (
                     <TransactionRowActions

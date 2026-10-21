@@ -12,7 +12,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { useAsyncData } from '@/hooks/useAsyncData'
 import { formatCurrency, formatPercent } from '@/lib/format'
 import { api } from '@/services'
-import { DATE_RANGES, type DateRangeKey } from '@/services/types'
+import { DATE_RANGES, DEFAULT_INTERVAL, INTERVALS, type DateRangeKey } from '@/services/types'
 
 const rangeOptions = DATE_RANGES.map((range) => ({
   value: range.key,
@@ -23,7 +23,13 @@ const rangeOptions = DATE_RANGES.map((range) => ({
 export function AnalyticsPage() {
   const [range, setRange] = useState<DateRangeKey>('12m')
 
-  const cashflow = useAsyncData((signal) => api.getCashflow(range, signal), [range])
+  // The window's own default granularity keeps the insights honest: a month
+  // is a meaningful unit for a year, a day for a week.
+  const interval = DEFAULT_INTERVAL[range]
+  const intervalLabel =
+    INTERVALS.find((option) => option.key === interval)?.label.toLowerCase() ?? 'period'
+
+  const cashflow = useAsyncData((signal) => api.getCashflow(range, interval, signal), [range])
   const breakdown = useAsyncData((signal) => api.getCategoryBreakdown(range, signal), [range])
   const summary = useAsyncData((signal) => api.getSummary(range, signal), [range])
   const merchants = useAsyncData(
@@ -35,7 +41,7 @@ export function AnalyticsPage() {
     const points = cashflow.data ?? []
     const categories = breakdown.data ?? []
 
-    const averageMonthlySpend =
+    const averageSpend =
       points.length > 0 ? points.reduce((sum, point) => sum + point.expenses, 0) / points.length : 0
 
     const peak = points.reduce<(typeof points)[number] | null>(
@@ -46,8 +52,8 @@ export function AnalyticsPage() {
     const topCategory = categories[0]
 
     return {
-      averageMonthlySpend,
-      peakMonth: peak?.label ?? '—',
+      averageSpend,
+      peakLabel: peak?.fullLabel ?? peak?.label ?? '—',
       peakAmount: peak?.expenses ?? 0,
       topCategoryName: topCategory?.name ?? '—',
       topCategoryAmount: topCategory?.amount ?? 0,
@@ -55,12 +61,13 @@ export function AnalyticsPage() {
   }, [cashflow.data, breakdown.data])
 
   const merchantList = merchants.data ?? []
+  const period = summary.data?.period
 
   return (
     <>
       <PageHeader
         title="Analytics"
-        description="Patterns behind your spending, drawn from the sample ledger."
+        description="Patterns behind your spending, drawn from your transactions."
         actions={
           <SegmentedControl
             options={rangeOptions}
@@ -74,15 +81,15 @@ export function AnalyticsPage() {
       <section aria-label="Analytics highlights" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Average spend"
-          value={formatCurrency(insights.averageMonthlySpend)}
+          value={formatCurrency(insights.averageSpend)}
           icon={TrendingUp}
           tone="neutral"
-          hint="per month"
+          hint={`per ${intervalLabel}`}
           loading={cashflow.isLoading}
         />
         <StatCard
-          label="Peak month"
-          value={insights.peakMonth}
+          label="Peak period"
+          value={insights.peakLabel}
           icon={Flame}
           tone="negative"
           hint={`${formatCurrency(insights.peakAmount)} spent`}
@@ -98,9 +105,9 @@ export function AnalyticsPage() {
         />
         <StatCard
           label="Net savings"
-          value={formatCurrency((summary.data?.income ?? 0) - (summary.data?.expenses ?? 0))}
-          icon={(summary.data?.income ?? 0) >= (summary.data?.expenses ?? 0) ? ArrowUpRight : ArrowDownRight}
-          tone={(summary.data?.income ?? 0) >= (summary.data?.expenses ?? 0) ? 'positive' : 'negative'}
+          value={formatCurrency(summary.data?.balance ?? 0)}
+          icon={(summary.data?.balance ?? 0) >= 0 ? ArrowUpRight : ArrowDownRight}
+          tone={(summary.data?.balance ?? 0) >= 0 ? 'positive' : 'negative'}
           hint={`${formatPercent(summary.data?.savingsRate ?? 0)} of income`}
           loading={summary.isLoading}
         />
@@ -110,7 +117,11 @@ export function AnalyticsPage() {
         <Card>
           <CardHeader
             title="Cashflow trend"
-            description="Income against expenses across the selected window."
+            description={
+              period
+                ? `Income against expenses · ${period.label.toLowerCase()}.`
+                : 'Income against expenses across the selected window.'
+            }
           />
           <div className="px-5 pb-5">
             {cashflow.isError ? (

@@ -16,6 +16,13 @@ import type {
 export interface ListTransactionsOptions {
   from?: Date | undefined
   to?: Date | undefined
+  /**
+   * Whether `to` is exclusive.
+   *
+   * Reporting windows are half-open (`[from, to)`) so consecutive windows
+   * never share a boundary transaction; an explicit `to` stays inclusive.
+   */
+  exclusiveTo?: boolean
   type?: TransactionType
   category?: CategorySlug
   search?: string
@@ -40,7 +47,10 @@ function buildFilter(userId: string, options: ListTransactionsOptions): QueryFil
   if (options.from || options.to) {
     filter.date = {}
     if (options.from) filter.date.$gte = options.from
-    if (options.to) filter.date.$lte = options.to
+    if (options.to) {
+      if (options.exclusiveTo) filter.date.$lt = options.to
+      else filter.date.$lte = options.to
+    }
   }
 
   if (options.type) filter.type = options.type

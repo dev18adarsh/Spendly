@@ -4,16 +4,11 @@ export {
   buildSeries,
   buildSummary,
   buildTopMerchants,
-  rangeDays,
+  resolveMockRange,
   transactionsInRange,
 } from './analytics'
-export type { MerchantSpend } from './analytics'
+export type { MerchantSpend, MockRange } from './analytics'
 export { mockCategories } from './categories'
 export { daysAgo, hoursAgo } from './helpers'
-export {
-  mockBudgetLimits,
-  mockChangesByRange,
-  mockHistoricalMonthly,
-  mockTotalBalance,
-} from './summary'
+export { mockBudgetLimits } from './summary'
 export { mockTransactions } from './transactions'

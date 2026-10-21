@@ -3,6 +3,7 @@ import type { z } from 'zod'
 
 import { env } from '../config/env.js'
 import { currentUser } from '../middleware/authenticate.js'
+import { resolveRange } from '../services/reporting-window.js'
 import {
   createTransaction as createTransactionService,
   deleteTransaction as deleteTransactionService,
@@ -29,8 +30,24 @@ export const listTransactions = asyncHandler(async (request: Request, response: 
   const { id: userId } = currentUser(request)
   const query = validated<ListTransactionsQuery>(request, 'query')
 
+  // A reporting window is resolved by the same code the analytics use, so a
+  // list and the totals beside it always cover exactly the same period.
+  const range = query.range
+    ? resolveRange(query.range, new Date(), query.tz)
+    : undefined
+
+  const from = range?.from ?? query.from
+  const to = range?.to ?? query.to
+  const exclusiveTo = range !== undefined
+
   const limit = Math.min(query.limit, env.maxPageSize)
-  const result = await listTransactionsService(userId, { ...query, limit })
+  const result = await listTransactionsService(userId, {
+    ...query,
+    from,
+    to,
+    exclusiveTo,
+    limit,
+  })
 
   const meta = buildPaginationMeta(result.total, {
     page: query.page,

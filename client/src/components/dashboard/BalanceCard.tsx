@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, Landmark, TrendingUp, Wallet } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, TrendingUp } from 'lucide-react'
 
 import { Sparkline } from '@/components/charts/Sparkline'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -7,20 +7,39 @@ import { formatCurrency, formatSignedPercent } from '@/lib/format'
 import type { MetricChange } from '@/types'
 
 export interface BalanceCardProps {
+  /**
+   * The balance of the whole ledger — the net of every transaction recorded
+   * before the reporting window closed.
+   */
   balance: number
   change?: MetricChange
+  /** Income of the reporting window. */
+  income?: number
+  /** Expenses of the reporting window. */
+  expenses?: number
+  /** The window the income and expenses belong to. */
+  periodLabel?: string
   /** Recent balance values used for the trend line. */
   series?: number[]
   loading?: boolean
 }
 
-const accounts = [
-  { id: 'checking', label: 'Everyday checking', value: 12480.62, icon: Wallet },
-  { id: 'savings', label: 'High-yield savings', value: 9230.8, icon: Landmark },
-]
-
-/** Hero card showing the headline balance and the accounts behind it. */
-export function BalanceCard({ balance, change, series = [], loading }: BalanceCardProps) {
+/**
+ * Hero card showing the balance of the ledger.
+ *
+ * Every figure comes from the transactions themselves: the headline is the
+ * net of the whole ledger and the two lines below it are the income and the
+ * expenses of the selected window.
+ */
+export function BalanceCard({
+  balance,
+  change,
+  income = 0,
+  expenses = 0,
+  periodLabel,
+  series = [],
+  loading,
+}: BalanceCardProps) {
   return (
     <div className="relative overflow-hidden rounded-card border border-line bg-surface">
       <div
@@ -31,7 +50,7 @@ export function BalanceCard({ balance, change, series = [], loading }: BalanceCa
       <div className="relative p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-medium text-ink-faint">Total balance</p>
+            <p className="text-xs font-medium text-ink-faint">All-time balance</p>
 
             {loading ? (
               <Skeleton className="mt-3 h-9 w-48" />
@@ -66,24 +85,19 @@ export function BalanceCard({ balance, change, series = [], loading }: BalanceCa
         </div>
 
         <div className="mt-4 grid gap-2.5 border-t border-line pt-4 sm:grid-cols-2">
-          {accounts.map((account) => (
-            <div key={account.id} className="flex items-center gap-2.5">
-              <span className="flex size-7 items-center justify-center rounded-[8px] bg-surface-3 text-ink-faint">
-                <account.icon className="size-3.5" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-[11px] text-ink-faint">{account.label}</p>
-                <p className="text-xs font-medium text-ink tabular">
-                  {formatCurrency(account.value)}
-                </p>
-              </div>
-            </div>
-          ))}
+          <div>
+            <p className="truncate text-[11px] text-ink-faint">Income{periodLabel ? ` · ${periodLabel}` : ''}</p>
+            <p className="text-xs font-medium text-ink tabular">{formatCurrency(income)}</p>
+          </div>
+          <div>
+            <p className="truncate text-[11px] text-ink-faint">Expenses{periodLabel ? ` · ${periodLabel}` : ''}</p>
+            <p className="text-xs font-medium text-ink tabular">{formatCurrency(expenses)}</p>
+          </div>
         </div>
 
         <p className="mt-4 flex items-center gap-1.5 text-[11px] text-ink-faint">
           <TrendingUp className="size-3" aria-hidden="true" />
-          Sample balance — connect an account to see live figures.
+          Net of every transaction on record.
         </p>
       </div>
     </div>
