@@ -1,7 +1,7 @@
 # Spendly
 
 A premium, dark-themed expense tracking web application — a React dashboard on top of a
-real Express + MongoDB backend.
+real Express + MongoDB backend with real-time Socket.IO synchronization.
 
 Transactions, monthly budgets and the dashboard analytics live in MongoDB. The API
 computes every figure from actual documents; there is no sample data hiding behind a
@@ -21,6 +21,31 @@ successful-looking response.
 | Real-time | Socket.IO 4 (WebSockets, user-isolated rooms, automatic reconnect recovery) |
 | Tests | Node test runner · Supertest · mongodb-memory-server |
 
+## Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│            Vercel Edge Network               │
+│   React 19 SPA (@spendly/client + Vite)      │
+└──────────────────────┬───────────────────────┘
+                       │ HTTPS REST (/api) & WSS (/socket.io)
+                       ▼
+┌──────────────────────────────────────────────┐
+│     Node.js Host (Render / Railway / Docker) │
+│       Express 5 + Socket.IO Server           │
+│  - Session Auth & CSRF Protection            │
+│  - Rate Limiting & Helmet Headers            │
+│  - User-Isolated Private Rooms (user:<id>)   │
+└──────────────────────┬───────────────────────┘
+                       │ TLS Mongoose Connection
+                       ▼
+┌──────────────────────────────────────────────┐
+│           MongoDB Atlas Cluster              │
+│  - Users, Sessions, Transactions, Budgets    │
+│  - Compound Unique Indexes                   │
+└──────────────────────────────────────────────┘
+```
+
 ## Repository layout
 
 ```
@@ -28,7 +53,7 @@ spendly/
 ├── client/                    # React + Vite frontend
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── auth/           # Sign-in and sign-up shell
+│   │   │   ├── auth/          # Sign-in and sign-up shell
 │   │   │   ├── charts/        # Sparkline and other chart primitives
 │   │   │   ├── dashboard/     # Dashboard-specific composites
 │   │   │   ├── layout/        # App shell, sidebar, top bar, page header
@@ -38,257 +63,189 @@ spendly/
 │   │   ├── data/mock/         # Sample data — isolated from the API contract
 │   │   ├── hooks/             # useAsyncData, useCategories, useMediaQuery…
 │   │   ├── lib/               # cn() and formatting helpers
-│   │   ├── pages/             # Route-level screens
+│   │   ├── pages/             # Route-level screens (Dashboard, Transactions, Budgets, Analytics, Settings)
+│   │   ├── realtime/          # Socket.IO client, context, reconnection recovery & status badge
 │   │   ├── routes/            # Router configuration
 │   │   ├── services/          # Data-source seam (mock ⇄ HTTP)
 │   │   └── types/             # Shared domain model
-│   └── .env.example
-└── server/                    # Express + MongoDB API
-    ├── src/
-    │   ├── config/            # Environment parsing and the MongoDB connection
-    │   ├── constants/         # Category taxonomy and shared enumerations
-    │   ├── models/            # Mongoose schemas
-    │   ├── services/          # Data access and aggregations
-    │   ├── controllers/       # HTTP handlers
-    │   ├── routes/            # Route tables
-    │   ├── middleware/        # Validation, database guard, authentication, CSRF, rate limiting
-    │   ├── validators/        # Zod request schemas
-    │   ├── utils/             # Response envelope, pagination, ApiError
-    │   ├── types/             # API DTOs
-    │   ├── scripts/           # Operational scripts
-    │   ├── test/              # Integration tests
-    │   ├── app.ts             # Express app factory
-    │   └── index.ts           # Server bootstrap
-    └── .env.example
+│   ├── .env.example
+│   └── vercel.json            # Vercel SPA routing rewrites & security headers
+├── server/                    # Express + MongoDB API
+│   ├── src/
+│   │   ├── config/            # Environment parsing and MongoDB connection
+│   │   ├── constants/         # Category taxonomy and shared enumerations
+│   │   ├── models/            # Mongoose schemas (User, Session, Transaction, Budget)
+│   │   ├── services/          # Data access, reporting window & aggregations
+│   │   ├── controllers/       # HTTP handlers
+│   │   ├── routes/            # Express route tables
+│   │   ├── middleware/        # Validation, database guard, auth, CSRF, rate limiting
+│   │   ├── validators/        # Zod request schemas
+│   │   ├── utils/             # Response envelope, pagination, ApiError
+│   │   ├── socket.ts          # Socket.IO server, session auth & event dispatchers
+│   │   ├── test/              # Integration tests
+│   │   ├── app.ts             # Express app factory
+│   │   └── index.ts           # Server bootstrap & graceful shutdown
+│   ├── .env.example
+│   └── Procfile               # Process file for hosting providers
+├── vercel.json                # Monorepo Vercel configuration
+├── render.yaml                # Render Blueprint configuration
+├── Dockerfile                 # Multi-stage production container
+└── Procfile                   # Root process file
 ```
 
-## Getting started
+## Local Development
 
 ```bash
-npm install            # installs the client and server workspaces
+npm install            # Installs client and server workspaces
 cp server/.env.example server/.env
-# …then add your MongoDB Atlas connection string to server/.env
+# Add your MongoDB Atlas connection string to server/.env
 
-npm run dev            # starts the Vite dev server on http://localhost:5173
-npm run dev:server     # starts the Express API on http://localhost:4000
+npm run dev            # Starts Vite dev server on http://localhost:5173
+npm run dev:server     # Starts Express API on http://localhost:4000
 ```
 
-Other scripts:
+Available scripts:
 
 ```bash
-npm run typecheck    # tsc for both workspaces
-npm run test         # server integration tests (in-memory MongoDB)
-npm run build        # production build for both workspaces
-npm run preview      # preview the built client
-npm run start:server # run the compiled API (after npm run build)
-npm run seed         # seed the category taxonomy
+npm run typecheck      # tsc typecheck for both client and server
+npm run test           # Server integration tests (in-memory MongoDB, 163 tests)
+npm run build          # Production build for both client and server
+npm run build:client   # Build frontend only (client/dist)
+npm run build:server   # Build backend only (server/dist)
+npm run preview        # Preview the built frontend locally
+npm run start:server   # Run the compiled backend (node server/dist/index.js)
+npm run seed           # Seed default category taxonomy into MongoDB
 ```
 
-### Running against the real API
+---
 
-The client ships with a sample-data preview build. To use the real thing:
+## Production Deployment Guide
 
+Spendly is architected for a modern two-tier deployment:
+* **Frontend**: Hosted on **Vercel** as a high-performance Edge-cached static Single Page Application.
+* **Backend**: Hosted on a persistent Node.js runtime such as **Render**, **Railway**, **Fly.io**, or **Docker** (AWS/GCP/DigitalOcean).
+
+> [!IMPORTANT]
+> **Why the Backend Requires a Persistent Node Service**
+> Spendly provides real-time state synchronization via **Socket.IO**. Vercel Serverless / Edge Functions are ephemeral and terminate after each request; they do **not** support persistent bidirectional WebSocket connections. Therefore, the backend must run as a long-running Node.js process.
+
+### Step 1: MongoDB Atlas Setup
+
+1. Create a free or dedicated cluster on [MongoDB Atlas](https://www.mongodb.com/cloud/atlas).
+2. Under **Security → Database Access**, create a user with `Read and write to any database` privileges.
+3. Under **Security → Network Access**, add an IP access entry:
+   - To allow connections from hosted platforms (Render/Railway), add `0.0.0.0/0` (Allow access from anywhere).
+4. Click **Connect → Drivers → Node.js** to copy your connection string:
+   ```
+   mongodb+srv://<username>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority&appName=Spendly
+   ```
+
+### Step 2: Deploy Backend to Render (or Railway / Fly.io / Docker)
+
+#### Option A: Using Render
+1. Create an account on [Render](https://render.com) and click **New → Web Service**.
+2. Connect your GitHub repository (`Spendly`).
+3. Configure the service settings:
+   - **Name**: `spendly-api`
+   - **Language**: `Node`
+   - **Branch**: `main`
+   - **Build Command**: `npm install && npm run build:server`
+   - **Start Command**: `npm run start:server`
+   - **Health Check Path**: `/api/health`
+4. Add the **Environment Variables** (see table below).
+5. Click **Create Web Service**. Once deployed, note your service URL (e.g. `https://spendly-api.onrender.com`).
+6. In the Render Shell (or locally with the production URI), run the one-time taxonomy seed:
+   ```bash
+   npm run seed:categories --workspace server
+   ```
+
+#### Option B: Using Docker
+Build and run the included multi-stage `Dockerfile`:
 ```bash
-cp server/.env.example server/.env      # add your MONGODB_URI
-cp client/.env.example client/.env.local # set VITE_DATA_SOURCE=api
-npm run seed                            # seed the category taxonomy
-npm run dev:server &                    # the API on :4000
-npm run dev                             # the client on :5173
+docker build -t spendly-api .
+docker run -p 4000:4000 -e MONGODB_URI="mongodb+srv://..." -e CORS_ORIGINS="https://spendly.vercel.app" spendly-api
 ```
 
-The app then requires an account: an anonymous visitor is sent to the sign-in screen,
-and the session lives in an HTTP-only cookie. Transactions and budgets that were created
-before authentication existed have no owner and are not reachable through the API —
-clear them before switching over.
+### Step 3: Deploy Frontend to Vercel
 
-## How data flows
+1. Create an account on [Vercel](https://vercel.com) and click **Add New → Project**.
+2. Import your GitHub repository (`Spendly`).
+3. Configure project build settings:
+   - **Framework Preset**: `Vite`
+   - **Root Directory**: Leave as `./` (or select `client` if deploying client only)
+   - **Build Command**: `npm run build:client` (or `npm run build` if root is `client`)
+   - **Output Directory**: `client/dist` (or `dist` if root is `client`)
+4. Set the **Environment Variables**:
+   - `VITE_DATA_SOURCE`: `api`
+   - `VITE_API_BASE_URL`: `https://spendly-api.onrender.com/api` (your backend URL + `/api`)
+   - `VITE_SOCKET_URL`: `https://spendly-api.onrender.com` (your backend URL)
+5. Click **Deploy**. Vercel will build the frontend with the included `vercel.json` rewrites and deploy it (e.g. `https://spendly.vercel.app`).
 
-The UI never talks to a data source directly — it depends on the `SpendlyApi` interface
-in `client/src/services/types.ts`:
+### Step 4: Configure Production CORS & Cookies
 
-```
-components ─▶ useAsyncData ─▶ services/index.ts ─┬─▶ services/mock/client.ts   (sample data)
-                                                  └─▶ services/http.ts          (live API)
-                                                         │
-                                                         ▼
-                                                   Express API → MongoDB Atlas
-```
+Because the frontend (`https://spendly.vercel.app`) and backend (`https://spendly-api.onrender.com`) are on different domains:
+1. In your backend environment settings, set:
+   - `CORS_ORIGINS`: `https://spendly.vercel.app` (include your custom domain if applicable)
+   - `COOKIE_SAMESITE`: `none` (required by browsers for cross-site authenticated cookies)
+   - `COOKIE_SECURE`: `true` (enforces HTTPS delivery required by `SameSite=None`)
+2. Save and redeploy the backend service.
 
-* **Mock** (default) serves the sample ledger in `client/src/data/mock/` with simulated
-  latency, so loading and error states are real while you work offline. It is a preview
-  build: it signs you in as a demo account and never writes anything anywhere.
-* **API** is wired up end-to-end. Set `VITE_DATA_SOURCE=api` in `client/.env.local` and
-  the same components read from the server: the HTTP adapter unwraps the response
-  envelope, translates the client's `range`/`categoryId` vocabulary into the API's
-  `from`/`to`/`category` parameters, and maps the server DTOs onto the shapes the UI
-  renders.
+---
 
-The server is the source of truth for the live path; the mock layer exists so the
-frontend stays usable without a database.
+## Environment Variables Reference
 
-## Working with transactions
+### Frontend (`client`)
 
-The dashboard and the transactions page read the same ledger, and both can change it.
+| Variable | Required in Prod | Description | Example |
+| --- | :---: | --- | --- |
+| `VITE_DATA_SOURCE` | **Yes** | Data source mode (`api` for production, `mock` for local preview) | `api` |
+| `VITE_API_BASE_URL` | **Yes** | Base endpoint for the Express API | `https://spendly-api.onrender.com/api` |
+| `VITE_SOCKET_URL` | Optional | Socket.IO endpoint (defaults to origin of `VITE_API_BASE_URL`) | `https://spendly-api.onrender.com` |
 
-* **One dialog for create and edit.** `useTransactionComposer()` opens the same
-  `TransactionForm` from the top bar, the dashboard and the transactions list, so the
-  fields, the validation and the error handling are identical everywhere.
-* **One HTTP client.** `client/src/services/http.ts` is the only place that talks to the
-  network. It sends the session cookie, repeats the CSRF token on every write, retries
-  once with a fresh token when the server rejects the old one, and turns a failure into
-  an `ApiError` that carries the field-level issues a `422` reports — those land on the
-  matching inputs instead of disappearing into a toast.
-* **Guarded submissions.** The form refuses to send an empty amount or a missing
-  category, and a second submit while a request is in flight is ignored.
-* **Immediate updates.** A successful mutation raises a data revision that every
-  `useAsyncData` hook depends on, so the list, the dashboard totals and the charts all
-  refresh without a page reload. Nothing is written to `localStorage`.
-* **Filters live in the URL.** `?search=`, `?category=`, `?type=` and `?range=` describe
-  the current view, so it can be shared, bookmarked and reloaded. The search box is
-  debounced before it reaches the API.
-* **Honest feedback.** Loading uses skeletons, an empty list explains what would appear
-  there, a failed request renders an error state with a retry, and a failed request never
-  falls back to sample data.
+### Backend (`server`)
 
-## How the dashboard calculates
+| Variable | Required in Prod | Default | Description |
+| --- | :---: | --- | --- |
+| `NODE_ENV` | **Yes** | `development` | Set to `production` |
+| `PORT` | Optional | `4000` | Port assigned by hosting environment |
+| `MONGODB_URI` | **Yes** | _none_ | MongoDB Atlas connection string (MANDATORY in production) |
+| `MONGODB_DB_NAME` | Optional | `spendly` | MongoDB database name |
+| `CORS_ORIGINS` | **Yes** | `http://localhost:5173` | Comma-separated allowed frontend origins |
+| `COOKIE_SAMESITE` | **Yes** | `lax` | Set to `none` for cross-domain production deployment |
+| `COOKIE_SECURE` | **Yes** | `true` in prod | Set to `true` (mandatory for HTTPS / `SameSite=none`) |
+| `COOKIE_DOMAIN` | Optional | _none_ | Domain for cookie scoping (e.g. `.spendly.com`) |
+| `SESSION_TTL_MS` | Optional | `604800000` | Session lifetime (7 days) |
+| `BCRYPT_ROUNDS` | Optional | `12` | Password hashing complexity factor |
+| `MAX_PAGE_SIZE` | Optional | `100` | Max page size limit on paginated queries |
+| `LOGIN_RATE_LIMIT`| Optional | `20` | Max sign-in attempts per IP per window |
+| `RATE_LIMIT_WINDOW_MS` | Optional | `900000` | Rate limit window (15 minutes) |
 
-Every figure the dashboard shows — the stat cards, both charts, the category donut and
-the recent list — is derived from **one reporting window**, resolved on the server.
+---
 
-**The window.** `range` picks a window (`7d` · `30d` · `90d` · `12m` · `3y`) and `tz`
-picks the zone it is drawn in: the browser's IANA zone, validated server-side, falling
-back to `UTC`. Day-based windows open at **local midnight** `N-1` days ago and close at
-the moment of the request; month-based windows open on the **first of the month**
-`M-1` months ago. Every window is **half-open** — `[from, to)` — so a transaction can
-never be counted twice or slip through the gap between two windows.
-
-| Figure | Rule |
-| --- | --- |
-| Income | sum of `income` transactions with `from <= date < to` |
-| Expenses | sum of `expense` transactions in the same window |
-| Total balance | `income - expenses` **for the window** |
-| All-time balance | `income - expenses` of every transaction before `to`, window or not |
-| Savings rate | `balance / income * 100`, and `0` when there is no income |
-| Days in period | local **calendar** days covered, both ends included |
-
-Days are counted off the calendar rather than the clock, so `Last 30 days` always answers
-`30 days` even when the closing day is 23 or 25 hours long.
-
-**Movement.** Each figure is compared with the window immediately before it, which is
-shifted back by a **calendar step** — `N` whole days or `M` whole months — rather than by
-the same number of milliseconds, so the comparison window is itself a whole window and
-never begins in the middle of a day. `changes.net` compares the two windows' nets;
-`changes.balance` compares the all-time balance against what stood before the window
-opened.
-
-**Buckets.** The cashflow and trend charts group that same window into `day`, `week`,
-`month` or `year` buckets (`$dateTrunc` on the server). Weeks start on **Sunday**, and
-buckets are matched by calendar key rather than by instant, so a transaction always
-lands in the bucket whose label it carries. The chart, the donut and the cards are sums
-over the identical `[from, to)` interval — the chart totals and the card totals are the
-same numbers by construction, not by coincidence.
-
-**Timezone.** Boundaries and bucket edges are computed in the reported zone with
-wall-clock helpers that stay correct across DST transitions, and the client renders
-dates in that same zone — a transaction, the bucket it appears in and the totals it
-contributes to can never disagree.
-
-The window is resolved from the request's `range`, `interval` and `tz` query parameters,
-so the browser never sends a date range for the server to trust. An empty account
-reports `$0.00` everywhere; no figure is ever invented.
-
-## Accounts and sessions
-
-Spendly signs people in with **cookie sessions** — no bearer token, no `Authorization`
-header, and nothing for the browser to keep in `localStorage`.
-
-* The session lives in an **HTTP-only cookie**; only its SHA-256 hash is stored in the
-  database, and signing out deletes that row, which revokes the session immediately.
-* Passwords are hashed with **bcrypt**. The hash is excluded from queries by default and
-  never leaves the server.
-* Every write repeats a **CSRF token** in the `X-CSRF-Token` header, and the `Origin`
-  header has to be one of the allowed origins.
-* Sign-in is **rate limited** per IP, and an account is locked for 15 minutes after 5
-  failed attempts.
-* An unknown email and a wrong password answer exactly the same way, so the API does not
-  leak which addresses are registered.
-* Every transaction and budget belongs to an account. All queries are scoped by the
-  signed-in user, so changing an id in a request never reaches somebody else's data.
-
-In the client the `AuthProvider` restores the session on load, `ProtectedRoute` keeps
-anonymous visitors out of the app, and a `401` from anywhere signs the person out and
-brings them back to the sign-in screen with an explanation.
-
-## The API
-
-A JSON REST API under `/api`, documented in detail in [`server/README.md`](server/README.md).
-
-| Method | Path | Description |
-| --- | --- | --- |
-| `GET` | `/api/health` | Liveness probe with the database state and connection error |
-| `GET` | `/api/health/ready` | Readiness probe — `503` while MongoDB is unavailable |
-| `POST` | `/api/auth/register` | Create an account and sign in |
-| `POST` | `/api/auth/login` | Sign in and receive a session cookie |
-| `POST` | `/api/auth/logout` | Revoke the session and clear the cookies |
-| `GET` | `/api/auth/me` | The account behind the current session |
-| `GET` | `/api/auth/csrf` | The CSRF token the client repeats on writes |
-| `GET` `POST` | `/api/transactions` | List (filtered, sorted, paginated) and create |
-| `GET` `PATCH` `DELETE` | `/api/transactions/:id` | Read, update and remove a transaction |
-| `GET` `POST` `PUT` | `/api/budgets` | Monthly budgets, with the amount already spent |
-| `GET` `PATCH` `DELETE` | `/api/budgets/:id` | Read, update and remove a budget |
-| `GET` | `/api/categories` | The category taxonomy |
-| `GET` | `/api/analytics/summary` | Balance, income, expenses, savings rate |
-| `GET` | `/api/analytics/cashflow` | Income/expense series over a range |
-| `GET` | `/api/analytics/categories` | Spend per category with share of total |
-| `GET` | `/api/analytics/merchants` | Merchants ranked by spend |
-
-Everything under `/api/transactions`, `/api/budgets` and `/api/analytics` needs a
-session; a request without one is a `401`.
-
-Every response uses the same envelope — `{ success, data, meta }` or
-`{ success, false, error }` — and every failure carries a status, a stable code and a
-human-readable message. Credentials never leave the server: the MongoDB URI is read
-from the environment, redacted in logs, and never exposed to the browser.
-
-If MongoDB cannot be reached, the API says so plainly — `503 DATABASE_UNAVAILABLE`
-with the connection error — instead of returning an empty result that looks like a
-successful query.
-
-## Real-time synchronization (Socket.IO)
+## Real-time Synchronization (Socket.IO)
 
 Spendly provides instantaneous real-time synchronization between browser tabs and devices via Socket.IO:
 
 * **Authenticated private rooms:** When a user signs in, their socket joins a private room (`user:<userId>`). Only transactions belonging to that user are dispatched to that room.
 * **Database as source of truth:** Mutations (creates, updates, deletes) are persisted to MongoDB first. Successful writes emit `transaction-created`, `transaction-updated`, or `transaction-deleted` events. Failed database writes never emit mutation events.
 * **Automatic client recovery:** When receiving mutation events, connected clients invalidate their local cache revision and refresh transactions, dashboard summary cards, spending charts, and budget progress without a full-page reload.
-* **Deduplication & reconnect resilience:** Event IDs prevent duplicate execution, and reconnection listeners automatically re-sync state against the REST API.
+* **Deduplication & reconnect resilience:** Unique event IDs prevent duplicate execution, and reconnection listeners automatically re-sync state against the REST API.
+* **Live status indicator:** The top navigation bar displays real-time connection status (`Live`, `Syncing…`, or `Offline`).
 * **Clustered deployments:** In production clusters running multiple backend instances behind a load balancer, a distributed adapter such as `@socket.io/redis-adapter` (with Redis Pub/Sub or Streams) or `@socket.io/mongo-adapter` is required to share events across nodes.
 
-## Design system
+## Security & Reliability Controls
 
-Tokens live in `client/src/index.css` under `@theme` — charcoal canvas, layered surfaces,
-hairline borders, and a single mint accent:
+* **HTTP Security Headers:** Protected with `helmet` on the backend and strict security headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy`) on the frontend.
+* **Cookie-Based Authentication:** HTTP-only, hardened session cookies. Passwords are salted and hashed with `bcrypt`.
+* **CSRF Defense:** Double-submit CSRF cookie token verified on all mutation endpoints (`POST`, `PUT`, `PATCH`, `DELETE`).
+* **Input Validation:** Strict Zod schema validation for all request bodies, queries, and parameters.
+* **Safe Error Responses:** Centralized error handler masks internal database connection strings using `redactUri` and never exposes driver stack traces to clients.
+* **Graceful Degradation:** `/api/health` probes report service and database readiness. Degraded database states respond with structured `503 DATABASE_UNAVAILABLE` rather than crashes or fabricated numbers.
 
-| Token | Value | Use |
-| --- | --- | --- |
-| `canvas` | `#090a0c` | Page background |
-| `surface` / `surface-2` / `surface-3` | `#0e1013` → `#191d21` | Cards and controls |
-| `line` / `line-strong` | `#212529` / `#2c3238` | Hairline borders |
-| `ink` / `ink-muted` / `ink-faint` | `#f3f5f7` → `#6a737e` | Text hierarchy |
-| `brand` | `#35d6a4` | Accent, positive movement |
-| `negative` | `#fb7185` | Expenses, negative movement |
-| `warning` | `#f2b544` | Limits and pending states |
+## Accessibility & Responsive Design
 
-## Accessibility
-
-* Semantic landmarks, a skip link, and `aria-current` on the active nav item.
-* The modal traps focus, closes on `Escape`/backdrop, and restores focus on unmount.
-* Icon-only controls carry accessible names; charts have text summaries.
-* `prefers-reduced-motion` disables animation and transitions globally.
-
-## Roadmap
-
-1. Recurring transactions and import from bank statements.
-2. Budget periods beyond monthly, and per-category rollover.
-3. Real-time updates (server-sent events) for the dashboard.
-4. Password reset and email verification.
+* Full responsiveness across mobile, tablet, and desktop viewports.
+* Accessible drawer navigation on mobile and fixed navigation rail on desktop.
+* Semantic landmarks, skip-to-content links, and full keyboard navigation.
+* Color tokens engineered for high contrast and readability on dark surfaces.
+* `prefers-reduced-motion` respected across animated progress bars and transitions.

@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: spendly-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build:server
+    startCommand: npm run start:server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_DB_NAME
+        value: spendly
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: true
+      - key: SESSION_TTL_MS
+        value: 604800000
+      - key: CORS_ORIGINS
+        sync: false
+      - key: MONGODB_URI
+        sync: false

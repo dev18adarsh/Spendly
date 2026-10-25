@@ -20,10 +20,11 @@ export const CSRF_COOKIE = 'spendly_csrf'
 export const CSRF_HEADER = 'x-csrf-token'
 
 function baseOptions(): CookieOptions {
+  const secure = env.cookieSameSite === 'none' ? true : env.cookieSecure
   const options: CookieOptions = {
     path: '/',
     sameSite: env.cookieSameSite,
-    secure: env.cookieSecure,
+    secure,
   }
 
   if (env.cookieDomain) options.domain = env.cookieDomain

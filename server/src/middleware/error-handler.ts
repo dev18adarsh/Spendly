@@ -3,6 +3,7 @@ import mongoose from 'mongoose'
 import { ZodError } from 'zod'
 
 import { getConnectionError } from '../config/database.js'
+import { redactUri } from '../config/env.js'
 import { ApiError } from '../utils/api-error.js'
 import { toFieldIssues } from '../validators/common.js'
 
@@ -122,7 +123,8 @@ export function errorHandler(
   }
 
   if (isDatabaseConnectivityError(error)) {
-    const reason = getConnectionError() ?? (error instanceof Error ? error.message : String(error))
+    const rawReason = getConnectionError() ?? (error instanceof Error ? error.message : String(error))
+    const reason = redactUri(rawReason)
     response.status(503).json({
       success: false,
       error: {
